@@ -1,1 +1,220 @@
+name: 🚀 Backend CI/CD Enterprise (AWS Mumbai)
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "app-examples/backend/**"
+      - "ci/**"
+      - "deploy/**"
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "app-examples/backend/**"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+  checks: write
+  deployments: write
+  security-events: write
+
+concurrency:
+  group: backend-production-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
+
+env:
+  AWS_REGION: ap-south-1
+  NODE_VERSION: 20
+
+jobs:
+  # ================= TEST =================
+  test:
+    name: 🧪 Tests, Lint & Coverage
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: app-examples/backend/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          cd app-examples/backend
+          npm ci --frozen-lockfile
+
+      - name: Lint
+        run: |
+          cd app-examples/backend
+          npm run lint
+
+      - name: Unit tests with coverage
+        run: |
+          cd app-examples/backend
+          npm test -- --coverage --coverageReporters=text-summary
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: app-examples/backend/coverage/
+          retention-days: 7
+
+      - name: Security scan (local)
+        run: bash ci/security.sh backend || true
+
+
+  # ================= BUILD & PUSH =================
+  build-push:
+    name: 🐳 Build, Scan & Push Image
+    runs-on: ubuntu-latest
+    needs: test
+
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: AWS OIDC Auth
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_GITHUB_ROLE }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build & Push Multi-Arch Image
+        id: build
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          cd app-examples/backend
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --provenance=false \
+            --build-arg NODE_VERSION=${{ env.NODE_VERSION }} \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:latest \
+            --push \
+            --cache-to=type=gha,mode=max \
+            --cache-from=type=gha
+
+      - name: Set image output
+        id: meta
+        run: |
+          echo "image=${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY }}:${{ github.sha }}" >> $GITHUB_OUTPUT
+
+      - name: Trivy Vulnerability Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.meta.outputs.image }}
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+          exit-code: 0
+
+      - name: Upload Trivy scan
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+
+
+  # ================= DEPLOY =================
+  deploy:
+    name: 🌐 ECS Blue-Green Deploy
+    runs-on: ubuntu-latest
+    needs: build-push
+    if: github.ref == 'refs/heads/main'
+
+    environment:
+      name: production
+      url: https://api.example.com/health
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: AWS OIDC Auth
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_GITHUB_ROLE }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Download current task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition ${{ secrets.ECS_TASK_DEFINITION }} \
+            --query taskDefinition > task-def.json
+
+      - name: Render new task definition
+        id: task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v2
+        with:
+          task-definition: task-def.json
+          container-name: backend-container
+          image: ${{ needs.build-push.outputs.image }}
+
+      - name: Deploy to ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.task-def.outputs.task-definition }}
+          service: ${{ secrets.ECS_SERVICE }}
+          cluster: ${{ secrets.ECS_CLUSTER }}
+          wait-for-service-stability: true
+          force-new-deployment: true
+
+      - name: Verify deployment health
+        run: |
+          curl -f https://api.example.com/health
+
+      - name: Post-deployment status
+        run: |
+          aws ecs describe-services \
+            --cluster ${{ secrets.ECS_CLUSTER }} \
+            --services ${{ secrets.ECS_SERVICE }} \
+            --query "services[0].deployments[0].{State:status,Rollout:rolloutState}"
+
+      - name: Slack Success Notification
+        if: success()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: success
+          fields: repo,message,commit,author,action,workflow
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+
+  # ================= FAILURE ALERT =================
+  notify-failure:
+    name: 🚨 Failure Alerts
+    runs-on: ubuntu-latest
+    if: failure()
+    needs: [test, build-push, deploy]
+
+    steps:
+      - name: Slack Failure Alert
+        uses: 8398a7/action-slack@v3
+        with:
+          status: failure
+          fields: repo,message,commit,author,action,workflow
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 
