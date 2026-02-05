@@ -1,20 +1,25 @@
-name: 📣 Final Release Notification
+name: 📣 Production Deploy Notification
 
 on:
   workflow_run:
     workflows:
       - "🚀 Backend CI/CD Enterprise (AWS Mumbai)"
-      - "🌐 Frontend CI/CD Enterprise (S3 + CloudFront)"
-      - "⚙️ Microservice CI/CD Enterprise (EKS Mumbai)"
+      - "🌐 Frontend CI/CD Enterprise (AWS-Aligned)"
+      - "🚀 Microservice CI/CD Enterprise (ECS Aligned)"
     types: [completed]
 
 permissions:
   contents: read
 
 jobs:
-  release-summary:
-    name: Send Final Slack Release Message
+  notify:
+    name: Send Slack Deploy Message
     runs-on: ubuntu-latest
+
+    # Only notify for successful production deploys on main
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main'
 
     steps:
       # -------- Collect workflow metadata --------
@@ -22,42 +27,45 @@ jobs:
         id: data
         run: |
           echo "service=${{ github.event.workflow_run.name }}" >> $GITHUB_OUTPUT
-          echo "status=${{ github.event.workflow_run.conclusion }}" >> $GITHUB_OUTPUT
-          echo "branch=${{ github.event.workflow_run.head_branch }}" >> $GITHUB_OUTPUT
           echo "commit=${{ github.event.workflow_run.head_sha }}" >> $GITHUB_OUTPUT
           echo "url=${{ github.event.workflow_run.html_url }}" >> $GITHUB_OUTPUT
 
+          # Duration
           start=$(date -d "${{ github.event.workflow_run.created_at }}" +%s)
           end=$(date -d "${{ github.event.workflow_run.updated_at }}" +%s)
           echo "duration=$(( (end - start) / 60 )) min" >> $GITHUB_OUTPUT
 
-      # -------- Define production service URLs --------
-      - name: Define environment URLs
+          # Deployer fallback logic
+          author="${{ github.event.workflow_run.head_commit.author.name }}"
+          actor="${{ github.event.workflow_run.actor.login }}"
+          if [ -z "$author" ]; then
+            author="$actor"
+          fi
+          echo "deployer=$author" >> $GITHUB_OUTPUT
+
+      # -------- Define production URL --------
+      - name: Set environment URL
         id: env
         run: |
-          echo "frontend_url=https://your-frontend-domain.com" >> $GITHUB_OUTPUT
-          echo "backend_url=https://api.your-domain.com/health" >> $GITHUB_OUTPUT
-          echo "microservice_url=https://micro.your-domain.com/health" >> $GITHUB_OUTPUT
+          echo "url=https://app.example.com" >> $GITHUB_OUTPUT
 
-      # -------- Send unified Slack notification --------
-      - name: Send unified Slack notification
+      # -------- Send Slack notification --------
+      - name: Send Slack notification
         uses: 8398a7/action-slack@v3
         with:
           status: custom
           custom_payload: |
             {
-              "text": "🚀 *Production Release Summary*",
+              "text": "🚀 *Production Deployment Successful*",
               "attachments": [
                 {
-                  "color": ${{ steps.data.outputs.status == 'success' && 'good' || 'danger' }},
+                  "color": "good",
                   "fields": [
                     { "title": "Service", "value": "${{ steps.data.outputs.service }}", "short": true },
-                    { "title": "Status", "value": "${{ steps.data.outputs.status }}", "short": true },
-                    { "title": "Branch", "value": "${{ steps.data.outputs.branch }}", "short": true },
+                    { "title": "Environment", "value": "<${{ steps.env.outputs.url }}|Prod>", "short": true },
+                    { "title": "Deployed by", "value": "${{ steps.data.outputs.deployer }}", "short": true },
                     { "title": "Duration", "value": "${{ steps.data.outputs.duration }}", "short": true },
-                    { "title": "Frontend", "value": "<${{ steps.env.outputs.frontend_url }}|Open Site>", "short": true },
-                    { "title": "Backend Health", "value": "<${{ steps.env.outputs.backend_url }}|Check API>", "short": true },
-                    { "title": "Microservice Health", "value": "<${{ steps.env.outputs.microservice_url }}|Check Service>", "short": true },
+                    { "title": "Commit", "value": "${{ steps.data.outputs.commit }}", "short": false },
                     { "title": "Workflow Run", "value": "<${{ steps.data.outputs.url }}|View Details>", "short": false }
                   ]
                 }
@@ -65,6 +73,3 @@ jobs:
             }
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-
-
-
