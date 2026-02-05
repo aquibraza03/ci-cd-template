@@ -1,1 +1,100 @@
+name: 🔐 Security Gate (Enterprise)
 
+on:
+  pull_request:
+    branches: ["main"]
+  push:
+    branches: ["main"]
+  schedule:
+    - cron: "0 2 * * 0"   # weekly CVE scan
+
+permissions:
+  contents: read
+  security-events: write
+  pull-requests: write
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ================= CodeQL (SAST) =================
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript, python, go
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@v3
+
+      # ================= Snyk (Dependencies) =================
+      - name: Install Snyk CLI
+        run: npm install -g snyk
+
+      - name: Snyk scan
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
+          snyk test --all-projects \
+            --severity-threshold=high \
+            --sarif-file-output=snyk.sarif \
+            $([[ "${{ github.event_name }}" == "pull_request" ]] && echo "|| true")
+
+      - name: Upload Snyk SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: snyk.sarif
+
+      # ================= Trivy (OS & packages) =================
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL,HIGH
+          format: sarif
+          output: trivy.sarif
+          exit-code: ${{ github.ref == 'refs/heads/main' && '1' || '0' }}
+
+      - name: Upload Trivy SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy.sarif
+
+      # ================= IaC Scan (Terraform etc.) =================
+      - name: Checkov IaC scan
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: .
+          framework: terraform
+          output_format: sarif
+          output_file_path: checkov.sarif
+          soft_fail: ${{ github.ref != 'refs/heads/main' }}
+
+      - name: Upload Checkov SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: checkov.sarif
+
+      # ================= SBOM (supply chain visibility) =================
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          format: cyclonedx-json
+          output-file: sbom.json
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.json
+
+      # ================= License compliance =================
+      - name: License check
+        run: |
+          npx license-checker --production --summary --failOn "GPL;AGPL"
