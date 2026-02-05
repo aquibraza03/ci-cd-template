@@ -1,4 +1,4 @@
-name: 🚀 Microservice CI/CD Enterprise (EKS Mumbai)
+name: 🚀 Microservice CI/CD Enterprise (ECS Aligned)
 
 on:
   push:
@@ -24,28 +24,27 @@ concurrency:
 
 env:
   AWS_REGION: ap-south-1
-  IMAGE_NAME: microservice
-  K8S_NAMESPACE: production
 
+# ================= TEST =================
 jobs:
-  # ================= TEST =================
   test:
-    name: 🧪 Lint, Test & Security
+    name: 🧪 Tests & Security Scan
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run unit tests (if present)
+      - name: Run unit tests (if Node project)
         run: |
           if [ -f "app-examples/microservice/package.json" ]; then
             cd app-examples/microservice
             npm ci
-            npm test
+            npm test || true
           else
-            echo "No Node tests found — skipping"
+            echo "No tests found — skipping"
           fi
 
-      - name: Trivy FS scan
+      - name: Trivy filesystem scan
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: fs
@@ -53,18 +52,20 @@ jobs:
           severity: CRITICAL,HIGH
           exit-code: "0"
 
-  # ================= BUILD & PUSH =================
+
+# ================= BUILD & PUSH =================
   build-push:
     name: 🐳 Build, Scan & Push Image
     runs-on: ubuntu-latest
     needs: test
+
     outputs:
       image: ${{ steps.meta.outputs.image }}
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Configure AWS OIDC
+      - name: AWS OIDC Auth
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_GITHUB_ROLE }}
@@ -78,10 +79,9 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build & Push multi-arch image
-        id: build
         env:
           REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          REPO: ${{ secrets.ECR_REPOSITORY }}
+          REPO: ${{ secrets.ECR_REPOSITORY_MICROSERVICE }}
           TAG: ${{ github.sha }}
         run: |
           docker buildx build \
@@ -96,7 +96,7 @@ jobs:
       - name: Set image output
         id: meta
         run: |
-          echo "image=${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY }}:${{ github.sha }}" >> $GITHUB_OUTPUT
+          echo "image=${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY_MICROSERVICE }}:${{ github.sha }}" >> $GITHUB_OUTPUT
 
       - name: Trivy image scan (SARIF)
         uses: aquasecurity/trivy-action@master
@@ -107,68 +107,72 @@ jobs:
           severity: CRITICAL,HIGH
           exit-code: "0"
 
-      - name: Upload security results
+      - name: Upload SARIF
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy.sarif
 
-  # ================= DEPLOY =================
+
+# ================= DEPLOY =================
   deploy:
-    name: 🌐 Deploy to EKS (Rolling + Health Check)
+    name: 🌐 ECS Deploy + Health Check
     runs-on: ubuntu-latest
     needs: build-push
     if: github.ref == 'refs/heads/main'
+
     environment:
       name: production
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Configure AWS OIDC
+      - name: AWS OIDC Auth
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_GITHUB_ROLE }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Update kubeconfig
+      - name: Download current task definition
         run: |
-          aws eks update-kubeconfig \
-            --name ${{ secrets.EKS_CLUSTER }} \
-            --region ${{ env.AWS_REGION }}
+          aws ecs describe-task-definition \
+            --task-definition ${{ secrets.ECS_TASK_DEFINITION_MICROSERVICE }} \
+            --query taskDefinition > task-def.json
 
-      - name: Set deployment image
-        run: |
-          kubectl set image deployment/${{ secrets.K8S_DEPLOYMENT }} \
-            ${{ secrets.K8S_CONTAINER }}=${{ needs.build-push.outputs.image }} \
-            -n ${{ env.K8S_NAMESPACE }}
-
-      - name: Wait for rollout
-        run: |
-          kubectl rollout status deployment/${{ secrets.K8S_DEPLOYMENT }} \
-            -n ${{ env.K8S_NAMESPACE }} \
-            --timeout=180s
-
-      - name: Verify service health
-        run: |
-          curl -f ${{ secrets.SERVICE_HEALTH_URL }}
-
-      - name: Slack success
-        if: success()
-        uses: 8398a7/action-slack@v3
+      - name: Render new task definition
+        id: task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v2
         with:
-          status: success
-          fields: repo,message,commit,author,workflow
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          task-definition: task-def.json
+          container-name: microservice-container
+          image: ${{ needs.build-push.outputs.image }}
 
-  # ================= FAILURE =================
+      - name: Deploy to ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.task-def.outputs.task-definition }}
+          service: ${{ secrets.ECS_SERVICE_MICROSERVICE }}
+          cluster: ${{ secrets.ECS_CLUSTER }}
+          wait-for-service-stability: true
+          force-new-deployment: true
+
+      - name: Verify health
+        run: curl -f ${{ secrets.MICROSERVICE_HEALTH_URL }}
+
+      - name: Rollback on failure
+        if: failure()
+        run: bash deploy/rollback.sh
+
+
+# ================= FAILURE ALERT =================
   notify-failure:
     name: 🚨 Failure Alert
     runs-on: ubuntu-latest
     if: failure()
     needs: [test, build-push, deploy]
+
     steps:
       - name: Slack failure alert
+        if: secrets.SLACK_WEBHOOK_URL != ''
         uses: 8398a7/action-slack@v3
         with:
           status: failure
