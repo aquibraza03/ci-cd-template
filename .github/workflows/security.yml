@@ -1,4 +1,4 @@
-name: 🔐 Security Gate (Enterprise)
+name: 🔐 Security Gate (Enterprise v3)
 
 on:
   pull_request:
@@ -7,11 +7,16 @@ on:
     branches: ["main"]
   schedule:
     - cron: "0 2 * * 0"   # weekly CVE scan
+  workflow_dispatch:
 
 permissions:
   contents: read
   security-events: write
   pull-requests: write
+  id-token: write
+
+env:
+  FAIL_ON_MAIN: ${{ github.ref == 'refs/heads/main' }}
 
 jobs:
   security:
@@ -20,7 +25,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ================= CodeQL (SAST) =================
+      # =====================================================
+      # CodeQL — SAST
+      # =====================================================
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
         with:
@@ -32,7 +39,10 @@ jobs:
       - name: Analyze
         uses: github/codeql-action/analyze@v3
 
-      # ================= Snyk (Dependencies) =================
+
+      # =====================================================
+      # Snyk — Dependency Vulnerabilities (fixed conditional)
+      # =====================================================
       - name: Install Snyk CLI
         run: npm install -g snyk
 
@@ -43,14 +53,17 @@ jobs:
           snyk test --all-projects \
             --severity-threshold=high \
             --sarif-file-output=snyk.sarif \
-            $([[ "${{ github.event_name }}" == "pull_request" ]] && echo "|| true")
+            ${{ env.FAIL_ON_MAIN == 'true' && '' || '|| true' }}
 
       - name: Upload Snyk SARIF
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: snyk.sarif
 
-      # ================= Trivy (OS & packages) =================
+
+      # =====================================================
+      # Trivy — Filesystem / OS / Packages
+      # =====================================================
       - name: Trivy filesystem scan
         uses: aquasecurity/trivy-action@master
         with:
@@ -59,14 +72,31 @@ jobs:
           severity: CRITICAL,HIGH
           format: sarif
           output: trivy.sarif
-          exit-code: ${{ github.ref == 'refs/heads/main' && '1' || '0' }}
+          exit-code: ${{ env.FAIL_ON_MAIN == 'true' && '1' || '0' }}
 
       - name: Upload Trivy SARIF
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy.sarif
 
-      # ================= IaC Scan (Terraform etc.) =================
+
+      # =====================================================
+      # Gitleaks — Secrets Detection
+      # =====================================================
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        with:
+          args: detect --no-git -v --report-format sarif --report-path gitleaks.sarif
+
+      - name: Upload Gitleaks SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: gitleaks.sarif
+
+
+      # =====================================================
+      # Checkov — IaC Security
+      # =====================================================
       - name: Checkov IaC scan
         uses: bridgecrewio/checkov-action@v12
         with:
@@ -74,14 +104,49 @@ jobs:
           framework: terraform
           output_format: sarif
           output_file_path: checkov.sarif
-          soft_fail: ${{ github.ref != 'refs/heads/main' }}
+          soft_fail: ${{ env.FAIL_ON_MAIN != 'true' }}
 
       - name: Upload Checkov SARIF
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: checkov.sarif
 
-      # ================= SBOM (supply chain visibility) =================
+
+      # =====================================================
+      # Container Image Scan
+      # =====================================================
+      - name: Build test container image
+        run: |
+          if find . -name Dockerfile | grep -q .; then
+            docker build -t security-test-image .
+          else
+            echo "No Dockerfile found — skipping container scan"
+            exit 0
+          fi
+
+      - name: Trivy container scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: security-test-image
+          format: sarif
+          output: trivy-image.sarif
+          severity: CRITICAL,HIGH
+          exit-code: ${{ env.FAIL_ON_MAIN == 'true' && '1' || '0' }}
+
+      - name: Upload container SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-image.sarif
+
+      # ---- Container cleanup (your improvement) ----
+      - name: Cleanup test image
+        if: always()
+        run: docker rmi security-test-image || true
+
+
+      # =====================================================
+      # SBOM — Supply Chain Visibility
+      # =====================================================
       - name: Generate SBOM
         uses: anchore/sbom-action@v0
         with:
@@ -94,7 +159,40 @@ jobs:
           name: sbom
           path: sbom.json
 
-      # ================= License compliance =================
+
+      # =====================================================
+      # License Compliance
+      # =====================================================
       - name: License check
         run: |
           npx license-checker --production --summary --failOn "GPL;AGPL"
+
+
+      # =====================================================
+      # OpenSSF Scorecard
+      # =====================================================
+      - name: Run OpenSSF Scorecard
+        uses: ossf/scorecard-action@v2
+        with:
+          results_file: scorecard.sarif
+          results_format: sarif
+          publish_results: false
+
+      - name: Upload Scorecard SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: scorecard.sarif
+
+
+      # =====================================================
+      # Slack Security Alert (your improvement)
+      # =====================================================
+      - name: Slack Security Alert
+        if: failure() && env.FAIL_ON_MAIN == 'true'
+        uses: 8398a7/action-slack@v3
+        with:
+          status: failure
+          fields: repo,commit,author,workflow
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
