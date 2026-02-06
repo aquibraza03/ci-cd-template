@@ -6,6 +6,7 @@ ENVIRONMENT="${ENVIRONMENT:-production}"
 TF_DIR="${TF_DIR:-deploy/terraform}"
 AUTO_APPROVE="${AUTO_APPROVE:-false}"
 WORKSPACE="${WORKSPACE:-$ENVIRONMENT}"
+TF_VAR_FILE="${TF_VAR_FILE:-terraform.tfvars}"
 
 echo "🏗️ Enterprise Terraform Provisioning"
 echo "Env: $ENVIRONMENT | Workspace: $WORKSPACE | Region: $AWS_REGION"
@@ -14,20 +15,22 @@ echo "Env: $ENVIRONMENT | Workspace: $WORKSPACE | Region: $AWS_REGION"
 command -v aws >/dev/null || { echo "❌ aws CLI missing"; exit 1; }
 command -v terraform >/dev/null || { echo "❌ terraform missing"; exit 1; }
 
-# ================= AWS + TF VERSION CHECK =================
 aws sts get-caller-identity >/dev/null || { echo "❌ AWS auth failed"; exit 1; }
-terraform version | head -1 | grep -q "v1." || { echo "⚠️ Unexpected Terraform version"; }
+
+# ================= BACKEND BUCKET CHECK =================
+if ! aws s3api head-bucket --bucket "tf-state-$AWS_REGION" 2>/dev/null; then
+  echo "❌ Terraform backend bucket tf-state-$AWS_REGION not found"
+  echo "Create it before running provisioning."
+  exit 1
+fi
 
 cd "$TF_DIR"
 
 # ================= FORMAT & VALIDATE =================
-echo "🧹 terraform fmt check"
 terraform fmt -check -recursive
-
-echo "🔍 terraform validate"
 terraform validate
 
-# ================= INIT (REMOTE BACKEND) =================
+# ================= INIT =================
 terraform init -upgrade \
   -backend-config="bucket=tf-state-$AWS_REGION" \
   -backend-config="key=$ENVIRONMENT/terraform.tfstate" \
@@ -39,12 +42,11 @@ terraform workspace select "$WORKSPACE" 2>/dev/null \
   || terraform workspace new "$WORKSPACE"
 
 # ================= DRIFT DETECTION =================
-echo "🔍 Drift detection (detailed exit code)"
-
 set +e
 terraform plan -detailed-exitcode \
   -var="aws_region=$AWS_REGION" \
   -var="environment=$ENVIRONMENT" \
+  -var-file="$TF_VAR_FILE" \
   > terraform-plan.txt 2>&1
 PLAN_EXIT=$?
 set -e
@@ -62,14 +64,21 @@ fi
 terraform plan \
   -var="aws_region=$AWS_REGION" \
   -var="environment=$ENVIRONMENT" \
+  -var-file="$TF_VAR_FILE" \
   -out=tfplan
+
+# ================= GITHUB PLAN SUMMARY =================
+if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+  echo "### Terraform Plan" >> "$GITHUB_STEP_SUMMARY"
+  echo '```' >> "$GITHUB_STEP_SUMMARY"
+  cat terraform-plan.txt >> "$GITHUB_STEP_SUMMARY"
+  echo '```' >> "$GITHUB_STEP_SUMMARY"
+fi
 
 # ================= APPLY =================
 if [[ "$AUTO_APPROVE" == "true" ]]; then
-  echo "🚀 AUTO-APPLY"
   terraform apply -auto-approve tfplan
 else
-  echo "⏳ Manual approval required"
   terraform apply tfplan
 fi
 
@@ -81,4 +90,5 @@ if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
 fi
 
 echo "✅ Provisioning complete"
+
 
