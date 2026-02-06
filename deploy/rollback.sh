@@ -6,25 +6,29 @@ AWS_REGION="${AWS_REGION:-ap-south-1}"
 CLUSTER="${CLUSTER:?ECS cluster required}"
 SERVICE="${SERVICE:?ECS service required}"
 TIMEOUT="${TIMEOUT:-300}"
+HEALTH_URL="${HEALTH_URL:-}"
+NOTIFY_SCRIPT="${NOTIFY_SCRIPT:-ci/notify.sh}"
 
-echo "↩️ Starting ECS rollback"
-echo "Cluster=$CLUSTER | Service=$SERVICE | Region=$AWS_REGION"
+START_TIME=$(date +%s)
 
-command -v aws >/dev/null || { echo "❌ aws CLI missing"; exit 1; }
+echo "↩️ Principal ECS rollback"
+echo "Cluster=$CLUSTER | Service=$SERVICE"
 
-# ================= FETCH DEPLOYMENT HISTORY =================
-echo "📦 Fetching recent task definitions..."
+for cmd in aws jq curl timeout; do
+  command -v "$cmd" >/dev/null || { echo "❌ Missing dependency: $cmd"; exit 1; }
+done
 
-TASK_DEFS=$(aws ecs describe-services \
+# ================= FETCH DEPLOYMENTS SAFELY =================
+DEPLOYMENTS_JSON=$(aws ecs describe-services \
   --cluster "$CLUSTER" \
   --services "$SERVICE" \
-  --query "services[0].deployments[].taskDefinition" \
-  --output text)
+  --query "services[0].deployments" \
+  --output json)
 
-CURRENT_TASK_DEF=$(echo "$TASK_DEFS" | awk '{print $1}')
-PREVIOUS_TASK_DEF=$(echo "$TASK_DEFS" | awk '{print $2}')
+CURRENT_TASK_DEF=$(echo "$DEPLOYMENTS_JSON" | jq -r '.[] | select(.status=="PRIMARY") | .taskDefinition')
+PREVIOUS_TASK_DEF=$(echo "$DEPLOYMENTS_JSON" | jq -r '.[] | select(.status!="PRIMARY") | .taskDefinition' | head -n1)
 
-if [[ -z "$PREVIOUS_TASK_DEF" ]]; then
+if [[ -z "$PREVIOUS_TASK_DEF" || "$PREVIOUS_TASK_DEF" == "null" ]]; then
   echo "❌ No previous task definition found — cannot rollback"
   exit 1
 fi
@@ -32,9 +36,7 @@ fi
 echo "Current:  $CURRENT_TASK_DEF"
 echo "Previous: $PREVIOUS_TASK_DEF"
 
-# ================= PERFORM ROLLBACK =================
-echo "🚑 Rolling back to previous stable task definition..."
-
+# ================= EXECUTE ROLLBACK =================
 aws ecs update-service \
   --cluster "$CLUSTER" \
   --service "$SERVICE" \
@@ -43,14 +45,39 @@ aws ecs update-service \
   --deployment-circuit-breaker "enable=true,rollback=true" \
   >/dev/null
 
-# ================= WAIT FOR STABILITY =================
-echo "⏳ Waiting for rollback stability (timeout=${TIMEOUT}s)"
+FAILED=false
 
+# ================= WAIT FOR ECS STABILITY =================
 if ! timeout "$TIMEOUT" aws ecs wait services-stable \
   --cluster "$CLUSTER" \
   --services "$SERVICE"; then
-  echo "❌ Rollback failed or timed out"
-  exit 1
+  echo "❌ Rollback ECS stabilization failed"
+  FAILED=true
 fi
 
-echo "✅ Rollback successful — service restored to last stable version"
+# ================= HEALTH CHECK =================
+if [[ "$FAILED" == "false" && -n "$HEALTH_URL" ]]; then
+  echo "🔍 Verifying application health..."
+
+  if ! timeout 60 bash -c "until curl -fsS '$HEALTH_URL' >/dev/null; do sleep 5; done"; then
+    echo "❌ Rollback health check failed"
+    FAILED=true
+  fi
+fi
+
+# ================= OBSERVABILITY =================
+END_TIME=$(date +%s)
+DURATION=$((END_TIME - START_TIME))
+
+STATUS=$([[ "$FAILED" == "true" ]] && echo "failure" || echo "success")
+
+echo "📊 Rollback status: $STATUS | Duration: ${DURATION}s"
+
+if [[ -f "$NOTIFY_SCRIPT" ]]; then
+  STATUS="$STATUS" IMAGE_URI="$PREVIOUS_TASK_DEF" ENVIRONMENT="production" \
+  bash "$NOTIFY_SCRIPT" || true
+fi
+
+# ================= FINAL EXIT =================
+[[ "$FAILED" == "true" ]] && exit 1 || exit 0
+
