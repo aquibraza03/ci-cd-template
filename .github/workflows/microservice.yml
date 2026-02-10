@@ -25,59 +25,73 @@ concurrency:
 env:
   AWS_REGION: ap-south-1
 
-# ================= TEST =================
+# =====================================================
+# TEST + FS SECURITY SCAN
+# =====================================================
 jobs:
   test:
-    name: 🧪 Tests & Security Scan
+    name: 🧪 Tests & FS Security Scan
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run unit tests (if Node project)
+      # ---------- Unit tests ----------
+      - name: Run unit tests
         run: |
           if [ -f "app-examples/microservice/package.json" ]; then
             cd app-examples/microservice
             npm ci
-            npm test || true
+
+            # Fail on main, soft-fail on PR
+            if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+              npm test
+            else
+              npm test || true
+            fi
           else
             echo "No tests found — skipping"
           fi
 
+      # ---------- Trivy filesystem scan ----------
       - name: Trivy filesystem scan
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@0.24.0
         with:
           scan-type: fs
           scan-ref: .
           severity: CRITICAL,HIGH
-          exit-code: "0"
+          exit-code: ${{ github.ref == 'refs/heads/main' && '1' || '0' }}
 
-
-# ================= BUILD & PUSH =================
+# =====================================================
+# BUILD IMAGE + CONTAINER SECURITY SCAN
+# =====================================================
   build-push:
     name: 🐳 Build, Scan & Push Image
     runs-on: ubuntu-latest
     needs: test
-
     outputs:
       image: ${{ steps.meta.outputs.image }}
 
     steps:
       - uses: actions/checkout@v4
 
+      # ---------- AWS auth via OIDC ----------
       - name: AWS OIDC Auth
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_GITHUB_ROLE }}
           aws-region: ${{ env.AWS_REGION }}
 
+      # ---------- Login to ECR ----------
       - name: Login to ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
+      # ---------- Docker buildx ----------
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # ---------- Build & push ----------
       - name: Build & Push multi-arch image
         env:
           REGISTRY: ${{ steps.login-ecr.outputs.registry }}
@@ -93,51 +107,56 @@ jobs:
             --cache-from=type=gha \
             app-examples/microservice
 
+      # ---------- Output image ----------
       - name: Set image output
         id: meta
-        run: |
-          echo "image=${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY_MICROSERVICE }}:${{ github.sha }}" >> $GITHUB_OUTPUT
+        run: echo "image=${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY_MICROSERVICE }}:${{ github.sha }}" >> $GITHUB_OUTPUT
 
+      # ---------- Trivy container scan ----------
       - name: Trivy image scan (SARIF)
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@0.24.0
         with:
           image-ref: ${{ steps.meta.outputs.image }}
           format: sarif
           output: trivy.sarif
           severity: CRITICAL,HIGH
-          exit-code: "0"
+          exit-code: ${{ github.ref == 'refs/heads/main' && '1' || '0' }}
 
+      # ---------- Upload SARIF ----------
       - name: Upload SARIF
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy.sarif
 
-
-# ================= DEPLOY =================
+# =====================================================
+# DEPLOY TO ECS (MAIN ONLY)
+# =====================================================
   deploy:
     name: 🌐 ECS Deploy + Health Check
     runs-on: ubuntu-latest
     needs: build-push
     if: github.ref == 'refs/heads/main'
-
     environment:
       name: production
 
     steps:
       - uses: actions/checkout@v4
 
+      # ---------- AWS auth ----------
       - name: AWS OIDC Auth
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_GITHUB_ROLE }}
           aws-region: ${{ env.AWS_REGION }}
 
+      # ---------- Fetch current task ----------
       - name: Download current task definition
         run: |
           aws ecs describe-task-definition \
             --task-definition ${{ secrets.ECS_TASK_DEFINITION_MICROSERVICE }} \
             --query taskDefinition > task-def.json
 
+      # ---------- Inject new image ----------
       - name: Render new task definition
         id: task-def
         uses: aws-actions/amazon-ecs-render-task-definition@v2
@@ -146,6 +165,7 @@ jobs:
           container-name: microservice-container
           image: ${{ needs.build-push.outputs.image }}
 
+      # ---------- Deploy ----------
       - name: Deploy to ECS
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
@@ -155,28 +175,33 @@ jobs:
           wait-for-service-stability: true
           force-new-deployment: true
 
+      # ---------- Health check ----------
       - name: Verify health
         run: curl -f ${{ secrets.MICROSERVICE_HEALTH_URL }}
 
+      # ---------- Rollback ----------
       - name: Rollback on failure
         if: failure()
         run: bash deploy/rollback.sh
 
-
-# ================= FAILURE ALERT =================
+# =====================================================
+# FAILURE ALERT
+# =====================================================
   notify-failure:
     name: 🚨 Failure Alert
     runs-on: ubuntu-latest
     if: failure()
     needs: [test, build-push, deploy]
 
+    env:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
     steps:
       - name: Slack failure alert
-        if: secrets.SLACK_WEBHOOK_URL != ''
+        if: env.SLACK_WEBHOOK_URL != ''
         uses: 8398a7/action-slack@v3
+        env:
+          SLACK_WEBHOOK_URL: ${{ env.SLACK_WEBHOOK_URL }}
         with:
           status: failure
           fields: repo,message,commit,author,workflow
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-
