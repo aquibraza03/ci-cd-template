@@ -1,4 +1,4 @@
-name: 🔐 Security Gate (Enterprise v6)
+name: 🔐 Security Gate (Enterprise v7)
 
 on:
   pull_request:
@@ -6,7 +6,7 @@ on:
   push:
     branches: ["main"]
   schedule:
-    - cron: "0 2 * * 0"   # weekly scan
+    - cron: "0 2 * * 0"
   workflow_dispatch:
 
 permissions:
@@ -24,21 +24,23 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      # =====================================================
-      # Checkout (pinned patch → supply-chain safety)
-      # =====================================================
+# =====================================================
+# Checkout
+# =====================================================
       - uses: actions/checkout@v4.2.2
 
-      # =====================================================
-      # Detect languages for CodeQL (prevents crash on templates)
-      # =====================================================
+# =====================================================
+# Detect languages for CodeQL (PREVENTS CRASH)
+# =====================================================
       - name: Detect languages for CodeQL
         id: langs
         run: |
           langs=""
+
           if git ls-files '*.js' '*.ts' | grep -q .; then
             langs="javascript"
           fi
+
           if git ls-files '*.py' | grep -q .; then
             langs="${langs:+$langs,}python"
           fi
@@ -50,19 +52,18 @@ jobs:
             echo "langs=$langs" >> $GITHUB_OUTPUT
           fi
 
-      # =====================================================
-      # Dependency Review (blocks vulnerable PRs)
-      # GitHub-native → pin MAJOR only
-      # =====================================================
+# =====================================================
+# Dependency Review (PR only)
+# =====================================================
       - name: Dependency Review
         if: github.event_name == 'pull_request'
         uses: github/dependency-review-action@v4
         with:
           fail-on-severity: critical
 
-      # =====================================================
-      # CodeQL SAST (GitHub-native → major pin only)
-      # =====================================================
+# =====================================================
+# CodeQL (RUN ONLY IF CODE EXISTS)
+# =====================================================
       - name: Initialize CodeQL
         if: steps.langs.outputs.skip != 'true'
         uses: github/codeql-action/init@v3
@@ -77,9 +78,9 @@ jobs:
         if: steps.langs.outputs.skip != 'true'
         uses: github/codeql-action/analyze@v3
 
-      # =====================================================
-      # Snyk Dependency Scan (single smart step)
-      # =====================================================
+# =====================================================
+# Snyk Dependency Scan
+# =====================================================
       - name: Install Snyk
         run: npm install -g snyk
 
@@ -95,9 +96,9 @@ jobs:
         with:
           sarif_file: snyk.sarif
 
-      # =====================================================
-      # Trivy Filesystem Scan (third-party → exact version pin)
-      # =====================================================
+# =====================================================
+# Trivy Filesystem Scan
+# =====================================================
       - name: Trivy filesystem scan
         uses: aquasecurity/trivy-action@0.24.0
         with:
@@ -114,9 +115,9 @@ jobs:
         with:
           sarif_file: trivy.sarif
 
-      # =====================================================
-      # Gitleaks Secret Detection (third-party → major pin OK)
-      # =====================================================
+# =====================================================
+# Gitleaks Secret Detection
+# =====================================================
       - name: Run Gitleaks
         uses: gitleaks/gitleaks-action@v2
         with:
@@ -128,9 +129,9 @@ jobs:
         with:
           sarif_file: gitleaks.sarif
 
-      # =====================================================
-      # Checkov IaC Scan (scan ALL frameworks)
-      # =====================================================
+# =====================================================
+# Checkov IaC Scan
+# =====================================================
       - name: Checkov IaC scan
         uses: bridgecrewio/checkov-action@v12
         with:
@@ -146,9 +147,9 @@ jobs:
         with:
           sarif_file: checkov.sarif
 
-      # =====================================================
-      # SBOM Generation (supply-chain visibility)
-      # =====================================================
+# =====================================================
+# SBOM Generation
+# =====================================================
       - name: Generate SBOM
         uses: anchore/sbom-action@v0
         with:
@@ -161,18 +162,18 @@ jobs:
           name: sbom
           path: sbom.json
 
-      # =====================================================
-      # License Compliance (realistic SaaS policy)
-      # =====================================================
-      - name: License check (Node on main)
+# =====================================================
+# License Compliance (main only)
+# =====================================================
+      - name: License check
         if: env.FAIL_ON_MAIN == 'true' && hashFiles('**/package.json') != ''
         run: |
           npm install -g license-checker
           license-checker --production --summary --failOn "GPL;AGPL"
 
-      # =====================================================
-      # OpenSSF Scorecard
-      # =====================================================
+# =====================================================
+# OpenSSF Scorecard
+# =====================================================
       - name: Run OpenSSF Scorecard
         uses: ossf/scorecard-action@v2
         with:
@@ -186,9 +187,9 @@ jobs:
         with:
           sarif_file: scorecard.sarif
 
-      # =====================================================
-      # Slack Alert (optional, pinned)
-      # =====================================================
+# =====================================================
+# Slack Alert (optional)
+# =====================================================
       - name: Slack Security Alert
         if: failure() && env.FAIL_ON_MAIN == 'true' && secrets.SLACK_WEBHOOK_URL != ''
         uses: 8398a7/action-slack@v3.0.0
