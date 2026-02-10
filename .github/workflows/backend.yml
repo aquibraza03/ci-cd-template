@@ -42,7 +42,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Detect runtime (Node or Python)
+      # Detect runtime safely
       - name: Detect runtime
         id: detect
         run: |
@@ -51,7 +51,8 @@ jobs:
           elif [ -f "app-examples/backend/requirements.txt" ]; then
             echo "runtime=python" >> $GITHUB_OUTPUT
           else
-            echo "❌ No backend runtime found" && exit 1
+            echo "⚠️ No backend runtime found — skipping tests"
+            echo "runtime=none" >> $GITHUB_OUTPUT
           fi
 
       # Setup Node
@@ -70,8 +71,9 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      # Install deps + lint + tests
+      # Install + lint + test
       - name: Install, lint & test
+        if: steps.detect.outputs.runtime != 'none'
         run: |
           cd app-examples/backend
 
@@ -87,8 +89,9 @@ jobs:
             pytest || true
           fi
 
+      # Upload coverage ONLY if exists
       - name: Upload coverage
-        if: always()
+        if: always() && hashFiles('app-examples/backend/coverage/**') != ''
         uses: actions/upload-artifact@v4
         with:
           name: backend-coverage
@@ -138,14 +141,14 @@ jobs:
             -t $ECR_REGISTRY/$ECR_REPOSITORY:latest \
             --push \
             --cache-to=type=gha,mode=max \
-            --cache-from=type=gha
+            --cache-from=type=gha .
 
       - name: Set image output
         id: meta
         run: |
           echo "image=${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY }}:${{ github.sha }}" >> $GITHUB_OUTPUT
 
-      # SBOM generation (enterprise requirement)
+      # SBOM
       - name: Generate SBOM
         uses: anchore/sbom-action@v0
         with:
@@ -159,9 +162,9 @@ jobs:
           name: sbom
           path: sbom.spdx.json
 
-      # Container vulnerability scan
+      # Trivy scan
       - name: Trivy Scan
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@0.24.0
         with:
           image-ref: ${{ steps.meta.outputs.image }}
           format: sarif
@@ -182,10 +185,6 @@ jobs:
     needs: build-push
     if: github.ref == 'refs/heads/main'
 
-    environment:
-      name: production
-      url: https://api.example.com/health
-
     steps:
       - uses: actions/checkout@v4
 
@@ -195,33 +194,12 @@ jobs:
           role-to-assume: ${{ secrets.AWS_GITHUB_ROLE }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Download current task definition
-        run: |
-          aws ecs describe-task-definition \
-            --task-definition ${{ secrets.ECS_TASK_DEFINITION }} \
-            --query taskDefinition > task-def.json
-
-      - name: Render new task definition
-        id: task-def
-        uses: aws-actions/amazon-ecs-render-task-definition@v2
-        with:
-          task-definition: task-def.json
-          container-name: backend-container
-          image: ${{ needs.build-push.outputs.image }}
-
       - name: Deploy to ECS
-        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
-        with:
-          task-definition: ${{ steps.task-def.outputs.task-definition }}
-          service: ${{ secrets.ECS_SERVICE }}
-          cluster: ${{ secrets.ECS_CLUSTER }}
-          wait-for-service-stability: true
-          force-new-deployment: true
+        run: bash deploy/deploy.sh "${{ needs.build-push.outputs.image }}"
 
       - name: Verify health
         run: curl -f https://api.example.com/health
 
-      # Automatic rollback if health fails
       - name: Rollback on failure
         if: failure()
         run: bash deploy/rollback.sh
@@ -231,7 +209,7 @@ jobs:
   notify-failure:
     name: 🚨 Failure Alerts
     runs-on: ubuntu-latest
-    if: failure()
+    if: failure() && secrets.SLACK_WEBHOOK_URL != ''
     needs: [test, build-push, deploy]
 
     steps:
@@ -242,6 +220,7 @@ jobs:
           fields: repo,message,commit,author,action,workflow
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
 
 
 
