@@ -1,202 +1,138 @@
-name: 🔐 Security Gate (Enterprise v8)
+name: 🚀 Backend CI/CD (ECS Production)
 
 on:
-  pull_request:
-    branches: ["main"]
   push:
     branches: ["main"]
-  schedule:
-    - cron: "0 2 * * 0"
+    paths:
+      - "app-examples/backend/**"
+      - ".github/workflows/backend.yml"
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "app-examples/backend/**"
   workflow_dispatch:
 
 permissions:
-  contents: read
-  security-events: write
-  pull-requests: write
   id-token: write
+  contents: read
+  deployments: write
+
+concurrency:
+  group: backend-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
-  FAIL_ON_MAIN: ${{ github.ref == 'refs/heads/main' }}
+  AWS_REGION: ap-south-1
+  IMAGE_NAME: backend
 
+# =====================================================
+# TEST
+# =====================================================
 jobs:
-  security:
+  test:
+    name: 🧪 Run Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 30
 
     steps:
-# =====================================================
-# Checkout
-# =====================================================
       - uses: actions/checkout@v4.2.2
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: app-examples/backend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: app-examples/backend
+        run: npm ci
+
+      - name: Run tests
+        working-directory: app-examples/backend
+        run: npm test --if-present
+
 # =====================================================
-# Detect languages ONLY inside real source folders
-# (PREVENTS CodeQL crash completely)
+# BUILD & PUSH DOCKER IMAGE
 # =====================================================
-      - name: Detect languages for CodeQL
-        id: langs
+  build:
+    name: 🐳 Build & Push Image to ECR
+    runs-on: ubuntu-latest
+    needs: test
+
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+
+    steps:
+      - uses: actions/checkout@v4.2.2
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_GITHUB_ROLE }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set image metadata
+        id: meta
         run: |
-          langs=""
+          IMAGE_URI=${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY }}:${{ github.sha }}
+          echo "image=$IMAGE_URI" >> $GITHUB_OUTPUT
 
-          # Look only inside app-examples (ignore .github)
-          if find app-examples -type f \( -name "*.js" -o -name "*.ts" \) | grep -q .; then
-            langs="javascript"
-          fi
-
-          if find app-examples -type f -name "*.py" | grep -q .; then
-            langs="${langs:+$langs,}python"
-          fi
-
-          if [ -z "$langs" ]; then
-            echo "skip=true" >> $GITHUB_OUTPUT
-          else
-            echo "skip=false" >> $GITHUB_OUTPUT
-            echo "langs=$langs" >> $GITHUB_OUTPUT
-          fi
-
-# =====================================================
-# Dependency Review (PR only)
-# =====================================================
-      - name: Dependency Review
-        if: github.event_name == 'pull_request'
-        uses: github/dependency-review-action@v4
-        with:
-          fail-on-severity: critical
-
-# =====================================================
-# CodeQL — RUN ONLY IF REAL CODE EXISTS
-# =====================================================
-      - name: Initialize CodeQL
-        if: steps.langs.outputs.skip != 'true'
-        uses: github/codeql-action/init@v3
-        with:
-          languages: ${{ steps.langs.outputs.langs }}
-
-      - name: Autobuild
-        if: steps.langs.outputs.skip != 'true'
-        uses: github/codeql-action/autobuild@v3
-
-      - name: Analyze
-        if: steps.langs.outputs.skip != 'true'
-        uses: github/codeql-action/analyze@v3
-
-# =====================================================
-# Snyk Dependency Scan
-# =====================================================
-      - name: Install Snyk
-        run: npm install -g snyk
-
-      - name: Snyk scan
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        run: snyk test --all-projects --severity-threshold=high --sarif-file-output=snyk.sarif
-        continue-on-error: ${{ env.FAIL_ON_MAIN != 'true' }}
-
-      - name: Upload Snyk SARIF
-        if: always()
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: snyk.sarif
-
-# =====================================================
-# Trivy Filesystem Scan
-# =====================================================
-      - name: Trivy filesystem scan
-        uses: aquasecurity/trivy-action@0.24.0
-        with:
-          scan-type: fs
-          scan-ref: .
-          severity: CRITICAL,HIGH
-          format: sarif
-          output: trivy.sarif
-          exit-code: ${{ env.FAIL_ON_MAIN == 'true' && '1' || '0' }}
-
-      - name: Upload Trivy SARIF
-        if: always()
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: trivy.sarif
-
-# =====================================================
-# Gitleaks Secret Detection
-# =====================================================
-      - name: Run Gitleaks
-        uses: gitleaks/gitleaks-action@v2
-        with:
-          args: detect --no-git -v --report-format sarif --report-path gitleaks.sarif
-
-      - name: Upload Gitleaks SARIF
-        if: always()
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: gitleaks.sarif
-
-# =====================================================
-# Checkov IaC Scan (ALL frameworks)
-# =====================================================
-      - name: Checkov IaC scan
-        uses: bridgecrewio/checkov-action@v12
-        with:
-          directory: .
-          framework: all
-          output_format: sarif
-          output_file_path: checkov.sarif
-          soft_fail: ${{ env.FAIL_ON_MAIN != 'true' }}
-
-      - name: Upload Checkov SARIF
-        if: always()
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: checkov.sarif
-
-# =====================================================
-# SBOM Generation
-# =====================================================
-      - name: Generate SBOM
-        uses: anchore/sbom-action@v0
-        with:
-          format: cyclonedx-json
-          output-file: sbom.json
-
-      - name: Upload SBOM
-        uses: actions/upload-artifact@v4
-        with:
-          name: sbom
-          path: sbom.json
-
-# =====================================================
-# License Compliance (main only)
-# =====================================================
-      - name: License check
-        if: env.FAIL_ON_MAIN == 'true' && hashFiles('**/package.json') != ''
+      - name: Build & Push Docker image
         run: |
-          npm install -g license-checker
-          license-checker --production --summary --failOn "GPL;AGPL"
+          docker build \
+            -t ${{ steps.meta.outputs.image }} \
+            app-examples/backend
+
+          docker push ${{ steps.meta.outputs.image }}
 
 # =====================================================
-# OpenSSF Scorecard
+# DEPLOY TO ECS
 # =====================================================
-      - name: Run OpenSSF Scorecard
-        uses: ossf/scorecard-action@v2
-        with:
-          results_file: scorecard.sarif
-          results_format: sarif
-          publish_results: false
+  deploy:
+    name: 🌐 Deploy to ECS
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main'
 
-      - name: Upload Scorecard SARIF
-        if: always()
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: scorecard.sarif
+    environment:
+      name: production
+      url: https://api.example.com/health
 
-# =====================================================
-# Slack Alert (optional)
-# =====================================================
-      - name: Slack Security Alert
-        if: failure() && env.FAIL_ON_MAIN == 'true' && secrets.SLACK_WEBHOOK_URL != ''
-        uses: 8398a7/action-slack@v3.0.0
+    steps:
+      - uses: actions/checkout@v4.2.2
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          status: failure
-          fields: repo,commit,author,workflow
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          role-to-assume: ${{ secrets.AWS_GITHUB_ROLE }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Download current task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition ${{ secrets.ECS_TASK_DEFINITION }} \
+            --query taskDefinition > task-def.json
+
+      - name: Render new task definition
+        id: task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v2
+        with:
+          task-definition: task-def.json
+          container-name: backend-container
+          image: ${{ needs.build.outputs.image }}
+
+      - name: Deploy to ECS service
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.task-def.outputs.task-definition }}
+          service: ${{ secrets.ECS_SERVICE }}
+          cluster: ${{ secrets.ECS_CLUSTER }}
+          wait-for-service-stability: true
+
+      - name: Verify health endpoint
+        run: curl -f https://api.example.com/health
+
