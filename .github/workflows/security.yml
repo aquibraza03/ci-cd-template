@@ -3,10 +3,8 @@ name: 🔐 Security Gate
 on:
   pull_request:
     branches: ["main"]
-  push:
-    branches: ["main"]
   schedule:
-    - cron: "0 2 * * 0"
+    - cron: "0 2 * * 0"   # weekly security scan
   workflow_dispatch:
 
 permissions:
@@ -21,7 +19,6 @@ jobs:
     timeout-minutes: 30
 
     env:
-      FAIL_ON_MAIN: ${{ github.ref == 'refs/heads/main' }}
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 
     steps:
@@ -52,7 +49,7 @@ jobs:
         run: snyk test --all-projects --severity-threshold=high --sarif-file-output=snyk.sarif || true
 
       - name: Upload Snyk SARIF
-        if: github.event_name == 'push' && hashFiles('snyk.sarif') != ''
+        if: hashFiles('snyk.sarif') != ''
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: snyk.sarif
@@ -71,7 +68,7 @@ jobs:
           exit-code: 0
 
       - name: Upload Trivy SARIF
-        if: github.event_name == 'push' && hashFiles('trivy.sarif') != ''
+        if: hashFiles('trivy.sarif') != ''
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy.sarif
@@ -90,7 +87,7 @@ jobs:
             --exit-code 0
 
       - name: Upload Gitleaks SARIF
-        if: github.event_name == 'push' && hashFiles('gitleaks.sarif') != ''
+        if: hashFiles('gitleaks.sarif') != ''
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: gitleaks.sarif
@@ -108,7 +105,7 @@ jobs:
           soft_fail: true
 
       - name: Upload Checkov SARIF
-        if: github.event_name == 'push' && hashFiles('checkov.sarif') != ''
+        if: hashFiles('checkov.sarif') != ''
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: checkov.sarif
@@ -129,16 +126,17 @@ jobs:
           path: sbom.json
 
 # -----------------------------------------------------
-# Slack Alert (only if main branch fails)
+# Slack Alert (optional, only if secret exists)
 # -----------------------------------------------------
       - name: Slack Security Alert
-        if: failure() && env.FAIL_ON_MAIN == 'true' && env.SLACK_WEBHOOK_URL != ''
+        if: failure() && env.SLACK_WEBHOOK_URL != ''
         uses: 8398a7/action-slack@v3
         env:
           SLACK_WEBHOOK_URL: ${{ env.SLACK_WEBHOOK_URL }}
         with:
           status: failure
           fields: repo,commit,author,workflow
+
 
 
 
