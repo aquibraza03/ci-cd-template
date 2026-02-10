@@ -107,7 +107,7 @@ jobs:
           name: sbom
           path: sbom.json
 
-# Slack alert
+# Slack
       - name: Slack Security Alert
         if: failure() && env.FAIL_ON_MAIN == 'true' && env.SLACK_WEBHOOK_URL != ''
         uses: 8398a7/action-slack@v3
