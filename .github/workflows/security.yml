@@ -15,13 +15,15 @@ permissions:
   pull-requests: write
   id-token: write
 
-env:
-  FAIL_ON_MAIN: ${{ github.ref == 'refs/heads/main' }}
-
 jobs:
   security:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+
+    # ✅ Job-level env (fixes secrets-in-if issue)
+    env:
+      FAIL_ON_MAIN: ${{ github.ref == 'refs/heads/main' }}
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 
     steps:
 # -----------------------------------------------------
@@ -39,7 +41,7 @@ jobs:
           fail-on-severity: critical
 
 # -----------------------------------------------------
-# CodeQL — SKIP if no source code (TEMPLATE FIX)
+# CodeQL — Skip automatically if no source code
 # -----------------------------------------------------
       - name: Initialize CodeQL
         if: hashFiles('**/*.js','**/*.ts','**/*.jsx','**/*.tsx','**/*.py') != ''
@@ -149,13 +151,14 @@ jobs:
           license-checker --production --summary --failOn "GPL;AGPL"
 
 # -----------------------------------------------------
-# Slack alert (optional)
+# Slack alert (final fixed version)
 # -----------------------------------------------------
       - name: Slack Security Alert
-        if: failure() && env.FAIL_ON_MAIN == 'true' && secrets.SLACK_WEBHOOK_URL != ''
-        uses: 8398a7/action-slack@v3.0.0
+        if: failure() && env.FAIL_ON_MAIN == 'true' && env.SLACK_WEBHOOK_URL != ''
+        uses: 8398a7/action-slack@v3
+        env:
+          SLACK_WEBHOOK_URL: ${{ env.SLACK_WEBHOOK_URL }}
         with:
           status: failure
           fields: repo,commit,author,workflow
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
