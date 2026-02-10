@@ -25,10 +25,13 @@ jobs:
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 
     steps:
+# -----------------------------------------------------
+# Checkout
+# -----------------------------------------------------
       - uses: actions/checkout@v4.2.2
 
 # -----------------------------------------------------
-# Dependency Review
+# Dependency Review (PR only)
 # -----------------------------------------------------
       - name: Dependency Review
         if: github.event_name == 'pull_request'
@@ -37,7 +40,7 @@ jobs:
           fail-on-severity: critical
 
 # -----------------------------------------------------
-# Snyk
+# Snyk dependency scan
 # -----------------------------------------------------
       - name: Install Snyk
         run: npm install -g snyk
@@ -48,13 +51,13 @@ jobs:
         run: snyk test --all-projects --severity-threshold=high --sarif-file-output=snyk.sarif || true
 
       - name: Upload Snyk SARIF
-        if: github.event_name != 'pull_request' && hashFiles('snyk.sarif') != ''
+        if: (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) && hashFiles('snyk.sarif') != ''
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: snyk.sarif
 
 # -----------------------------------------------------
-# Trivy
+# Trivy filesystem scan
 # -----------------------------------------------------
       - name: Trivy filesystem scan
         uses: aquasecurity/trivy-action@0.24.0
@@ -67,13 +70,13 @@ jobs:
           exit-code: 0
 
       - name: Upload Trivy SARIF
-        if: github.event_name != 'pull_request' && hashFiles('trivy.sarif') != ''
+        if: (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) && hashFiles('trivy.sarif') != ''
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy.sarif
 
 # -----------------------------------------------------
-# Gitleaks
+# Gitleaks secret detection
 # -----------------------------------------------------
       - name: Run Gitleaks
         uses: gitleaks/gitleaks-action@v2
@@ -81,13 +84,13 @@ jobs:
           args: detect --no-git -v --report-format sarif --report-path gitleaks.sarif
 
       - name: Upload Gitleaks SARIF
-        if: github.event_name != 'pull_request' && hashFiles('gitleaks.sarif') != ''
+        if: (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) && hashFiles('gitleaks.sarif') != ''
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: gitleaks.sarif
 
 # -----------------------------------------------------
-# Checkov
+# Checkov IaC scan
 # -----------------------------------------------------
       - name: Checkov IaC scan
         uses: bridgecrewio/checkov-action@v12
@@ -99,13 +102,13 @@ jobs:
           soft_fail: true
 
       - name: Upload Checkov SARIF
-        if: github.event_name != 'pull_request' && hashFiles('checkov.sarif') != ''
+        if: (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) && hashFiles('checkov.sarif') != ''
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: checkov.sarif
 
 # -----------------------------------------------------
-# SBOM
+# SBOM generation
 # -----------------------------------------------------
       - name: Generate SBOM
         uses: anchore/sbom-action@v0
@@ -120,7 +123,7 @@ jobs:
           path: sbom.json
 
 # -----------------------------------------------------
-# Slack alert
+# Slack alert (only real failures on main)
 # -----------------------------------------------------
       - name: Slack Security Alert
         if: failure() && env.FAIL_ON_MAIN == 'true' && env.SLACK_WEBHOOK_URL != ''
@@ -130,6 +133,7 @@ jobs:
         with:
           status: failure
           fields: repo,commit,author,workflow
+
 
 
 
