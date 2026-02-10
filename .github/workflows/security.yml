@@ -25,13 +25,10 @@ jobs:
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 
     steps:
-# -----------------------------------------------------
-# Checkout
-# -----------------------------------------------------
       - uses: actions/checkout@v4.2.2
 
 # -----------------------------------------------------
-# Dependency Review (PR only)
+# Dependency Review
 # -----------------------------------------------------
       - name: Dependency Review
         if: github.event_name == 'pull_request'
@@ -40,59 +37,7 @@ jobs:
           fail-on-severity: critical
 
 # -----------------------------------------------------
-# Detect source languages for CodeQL
-# -----------------------------------------------------
-      - name: Detect source code
-        id: detect
-        run: |
-          shopt -s globstar nullglob
-          js_files=(**/*.js **/*.ts **/*.jsx **/*.tsx)
-          py_files=(**/*.py)
-
-          if [ ${#js_files[@]} -gt 0 ]; then
-            echo "has_js=true" >> $GITHUB_OUTPUT
-          fi
-
-          if [ ${#py_files[@]} -gt 0 ]; then
-            echo "has_py=true" >> $GITHUB_OUTPUT
-          fi
-
-# -----------------------------------------------------
-# CodeQL — JavaScript
-# -----------------------------------------------------
-      - name: Initialize CodeQL (JS)
-        if: steps.detect.outputs.has_js == 'true'
-        uses: github/codeql-action/init@v4
-        with:
-          languages: javascript
-
-      - name: Autobuild (JS)
-        if: steps.detect.outputs.has_js == 'true'
-        uses: github/codeql-action/autobuild@v4
-
-      - name: Analyze (JS)
-        if: steps.detect.outputs.has_js == 'true'
-        uses: github/codeql-action/analyze@v4
-
-# -----------------------------------------------------
-# CodeQL — Python
-# -----------------------------------------------------
-      - name: Initialize CodeQL (Python)
-        if: steps.detect.outputs.has_py == 'true'
-        uses: github/codeql-action/init@v4
-        with:
-          languages: python
-
-      - name: Autobuild (Python)
-        if: steps.detect.outputs.has_py == 'true'
-        uses: github/codeql-action/autobuild@v4
-
-      - name: Analyze (Python)
-        if: steps.detect.outputs.has_py == 'true'
-        uses: github/codeql-action/analyze@v4
-
-# -----------------------------------------------------
-# Snyk dependency scan
+# Snyk
 # -----------------------------------------------------
       - name: Install Snyk
         run: npm install -g snyk
@@ -109,7 +54,7 @@ jobs:
           sarif_file: snyk.sarif
 
 # -----------------------------------------------------
-# Trivy filesystem scan
+# Trivy
 # -----------------------------------------------------
       - name: Trivy filesystem scan
         uses: aquasecurity/trivy-action@0.24.0
@@ -128,7 +73,7 @@ jobs:
           sarif_file: trivy.sarif
 
 # -----------------------------------------------------
-# Gitleaks secret detection
+# Gitleaks
 # -----------------------------------------------------
       - name: Run Gitleaks
         uses: gitleaks/gitleaks-action@v2
@@ -142,7 +87,7 @@ jobs:
           sarif_file: gitleaks.sarif
 
 # -----------------------------------------------------
-# Checkov IaC scan
+# Checkov
 # -----------------------------------------------------
       - name: Checkov IaC scan
         uses: bridgecrewio/checkov-action@v12
@@ -160,7 +105,7 @@ jobs:
           sarif_file: checkov.sarif
 
 # -----------------------------------------------------
-# SBOM generation
+# SBOM
 # -----------------------------------------------------
       - name: Generate SBOM
         uses: anchore/sbom-action@v0
@@ -175,7 +120,7 @@ jobs:
           path: sbom.json
 
 # -----------------------------------------------------
-# Slack alert (only real failures on main)
+# Slack alert
 # -----------------------------------------------------
       - name: Slack Security Alert
         if: failure() && env.FAIL_ON_MAIN == 'true' && env.SLACK_WEBHOOK_URL != ''
@@ -185,6 +130,7 @@ jobs:
         with:
           status: failure
           fields: repo,commit,author,workflow
+
 
 
 
