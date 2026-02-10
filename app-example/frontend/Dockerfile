@@ -1,20 +1,27 @@
-FROM node:20-alpine
+# ---------- Build stage ----------
+FROM node:20-alpine AS builder
 
 WORKDIR /app
-
 COPY package*.json ./
-RUN npm ci && npm run build
+RUN npm ci
 
-# Use nginx for serving static files
+COPY . .
+RUN npm run build
+
+
+# ---------- Runtime stage ----------
 FROM nginx:alpine
 
-COPY --from=0 /app/dist /usr/share/nginx/html
+# Copy built static files
+COPY --from=builder /app/dist /usr/share/nginx/html
 
-# Run as non-root user (nginx already non-root safe in alpine)
+# Ensure non-root runtime (nginx user already exists)
 USER nginx
 
 EXPOSE 80
 
+# Healthcheck for load balancer / ECS / Kubernetes
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD wget -qO- http://localhost || exit 1
+
 
