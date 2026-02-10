@@ -16,26 +16,30 @@ jobs:
     name: Send Slack Deploy Message
     runs-on: ubuntu-latest
 
-    # Only notify for successful production deploys on main
     if: >
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.head_branch == 'main'
 
+    env:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
     steps:
-      # -------- Collect workflow metadata --------
+# -----------------------------------------------------
+# Collect workflow metadata
+# -----------------------------------------------------
       - name: Collect workflow data
         id: data
         run: |
           echo "service=${{ github.event.workflow_run.name }}" >> $GITHUB_OUTPUT
           echo "commit=${{ github.event.workflow_run.head_sha }}" >> $GITHUB_OUTPUT
-          echo "url=${{ github.event.workflow_run.html_url }}" >> $GITHUB_OUTPUT
+          echo "run_url=${{ github.event.workflow_run.html_url }}" >> $GITHUB_OUTPUT
 
-          # Duration
-          start=$(date -d "${{ github.event.workflow_run.created_at }}" +%s)
-          end=$(date -d "${{ github.event.workflow_run.updated_at }}" +%s)
+          # Safe duration calculation
+          start=$(date -u -d "${{ github.event.workflow_run.created_at }}" +%s)
+          end=$(date -u -d "${{ github.event.workflow_run.updated_at }}" +%s)
           echo "duration=$(( (end - start) / 60 )) min" >> $GITHUB_OUTPUT
 
-          # Deployer fallback logic
+          # Deployer fallback
           author="${{ github.event.workflow_run.head_commit.author.name }}"
           actor="${{ github.event.workflow_run.actor.login }}"
           if [ -z "$author" ]; then
@@ -43,14 +47,32 @@ jobs:
           fi
           echo "deployer=$author" >> $GITHUB_OUTPUT
 
-      # -------- Define production URL --------
-      - name: Set environment URL
-        id: env
+# -----------------------------------------------------
+# Map service → production URL
+# -----------------------------------------------------
+      - name: Set production URL
+        id: envurl
         run: |
-          echo "url=https://app.example.com" >> $GITHUB_OUTPUT
+          case "${{ github.event.workflow_run.name }}" in
+            *Backend*)
+              echo "url=https://api.example.com" >> $GITHUB_OUTPUT
+              ;;
+            *Frontend*)
+              echo "url=https://app.example.com" >> $GITHUB_OUTPUT
+              ;;
+            *Microservice*)
+              echo "url=https://ms.example.com" >> $GITHUB_OUTPUT
+              ;;
+            *)
+              echo "url=https://example.com" >> $GITHUB_OUTPUT
+              ;;
+          esac
 
-      # -------- Send Slack notification --------
+# -----------------------------------------------------
+# Slack notification
+# -----------------------------------------------------
       - name: Send Slack notification
+        if: env.SLACK_WEBHOOK_URL != ''
         uses: 8398a7/action-slack@v3
         with:
           status: custom
@@ -62,14 +84,14 @@ jobs:
                   "color": "good",
                   "fields": [
                     { "title": "Service", "value": "${{ steps.data.outputs.service }}", "short": true },
-                    { "title": "Environment", "value": "<${{ steps.env.outputs.url }}|Prod>", "short": true },
+                    { "title": "Environment", "value": "<${{ steps.envurl.outputs.url }}|Prod>", "short": true },
                     { "title": "Deployed by", "value": "${{ steps.data.outputs.deployer }}", "short": true },
                     { "title": "Duration", "value": "${{ steps.data.outputs.duration }}", "short": true },
                     { "title": "Commit", "value": "${{ steps.data.outputs.commit }}", "short": false },
-                    { "title": "Workflow Run", "value": "<${{ steps.data.outputs.url }}|View Details>", "short": false }
+                    { "title": "Workflow Run", "value": "<${{ steps.data.outputs.run_url }}|View Details>", "short": false }
                   ]
                 }
               ]
             }
         env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_URL: ${{ env.SLACK_WEBHOOK_URL }}
