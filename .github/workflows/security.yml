@@ -25,16 +25,23 @@ jobs:
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 
     steps:
+# -----------------------------------------------------
+# Checkout
+# -----------------------------------------------------
       - uses: actions/checkout@v4.2.2
 
-# Dependency Review
+# -----------------------------------------------------
+# Dependency Review (PR only)
+# -----------------------------------------------------
       - name: Dependency Review
         if: github.event_name == 'pull_request'
         uses: actions/dependency-review-action@v4
         with:
           fail-on-severity: critical
 
-# ---------------- Snyk ----------------
+# -----------------------------------------------------
+# Snyk
+# -----------------------------------------------------
       - name: Install Snyk
         run: npm install -g snyk
 
@@ -49,7 +56,9 @@ jobs:
         with:
           sarif_file: snyk.sarif
 
-# ---------------- Trivy ----------------
+# -----------------------------------------------------
+# Trivy
+# -----------------------------------------------------
       - name: Trivy filesystem scan
         uses: aquasecurity/trivy-action@0.24.0
         with:
@@ -66,11 +75,32 @@ jobs:
         with:
           sarif_file: trivy.sarif
 
-# ---------------- Gitleaks ----------------
-      - name: Run Gitleaks
-        uses: gitleaks/gitleaks-action@v2.3.2
+# -----------------------------------------------------
+# Gitleaks (stable manual CLI — FIXED)
+# -----------------------------------------------------
+      - name: Install Gitleaks
+        run: |
+          curl -sSL https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks-linux-amd64.tar.gz \
+            | tar -xz
+          sudo mv gitleaks /usr/local/bin/
 
-# ---------------- Checkov ----------------
+      - name: Run Gitleaks scan
+        run: |
+          gitleaks detect \
+            --source . \
+            --report-format sarif \
+            --report-path gitleaks.sarif \
+            --exit-code 0
+
+      - name: Upload Gitleaks SARIF
+        if: github.event_name == 'push' && hashFiles('gitleaks.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: gitleaks.sarif
+
+# -----------------------------------------------------
+# Checkov (IaC)
+# -----------------------------------------------------
       - name: Checkov IaC scan
         uses: bridgecrewio/checkov-action@v12
         with:
@@ -86,7 +116,9 @@ jobs:
         with:
           sarif_file: checkov.sarif
 
-# ---------------- SBOM ----------------
+# -----------------------------------------------------
+# SBOM
+# -----------------------------------------------------
       - name: Generate SBOM
         uses: anchore/sbom-action@v0
         with:
@@ -99,7 +131,9 @@ jobs:
           name: sbom
           path: sbom.json
 
-# ---------------- Slack ----------------
+# -----------------------------------------------------
+# Slack Alert (only on main failure)
+# -----------------------------------------------------
       - name: Slack Security Alert
         if: failure() && env.FAIL_ON_MAIN == 'true' && env.SLACK_WEBHOOK_URL != ''
         uses: 8398a7/action-slack@v3
@@ -108,6 +142,7 @@ jobs:
         with:
           status: failure
           fields: repo,commit,author,workflow
+
 
 
 
