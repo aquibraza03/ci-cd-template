@@ -1,0 +1,5 @@
+{
+  "name": "ci-cd-demo-microservice",
+  "version": "1.0.0",
+  "scripts": { "start": "node index.js" },
+  "dependencies": { "express":
