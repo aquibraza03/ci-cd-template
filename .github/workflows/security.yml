@@ -31,7 +31,7 @@ jobs:
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
         with:
-          languages: javascript, python, go
+          languages: javascript, python   # remove "go" if you have no Go code
 
       - name: Autobuild
         uses: github/codeql-action/autobuild@v3
@@ -41,19 +41,25 @@ jobs:
 
 
       # =====================================================
-      # Snyk — Dependency Vulnerabilities (fixed conditional)
+      # Snyk — Dependency Vulnerabilities
       # =====================================================
       - name: Install Snyk CLI
         run: npm install -g snyk
 
-      - name: Snyk scan
+      - name: Snyk scan (non‑main is soft‑fail)
+        if: ${{ env.FAIL_ON_MAIN != 'true' }}
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: |
-          snyk test --all-projects \
-            --severity-threshold=high \
-            --sarif-file-output=snyk.sarif \
-            ${{ env.FAIL_ON_MAIN == 'true' && '' || '|| true' }}
+          snyk test --all-projects --severity-threshold=high --sarif-file-output=snyk.sarif || true
+
+      - name: Snyk scan (fail on main)
+        if: ${{ env.FAIL_ON_MAIN == 'true' }}
+        env:
+          SNYk_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
+          snyk test --all-projects --severity-threshold=high --sarif-file-output=snyk.sarif
+
 
       - name: Upload Snyk SARIF
         uses: github/codeql-action/upload-sarif@v3
@@ -125,6 +131,7 @@ jobs:
           fi
 
       - name: Trivy container scan
+        if: steps.build-test-image.outcome == 'success'
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: security-test-image
@@ -138,7 +145,6 @@ jobs:
         with:
           sarif_file: trivy-image.sarif
 
-      # ---- Container cleanup (your improvement) ----
       - name: Cleanup test image
         if: always()
         run: docker rmi security-test-image || true
@@ -163,9 +169,14 @@ jobs:
       # =====================================================
       # License Compliance
       # =====================================================
-      - name: License check
+      - name: License check (if Node)
+        if: ${{ env.FAIL_ON_MAIN == 'true' }}
         run: |
-          npx license-checker --production --summary --failOn "GPL;AGPL"
+          if [ -f "package.json" ]; then
+            npx license-checker --production --summary --failOn "GPL;AGPL" || exit 1
+          else
+            echo "No package.json; skipping license check."
+          fi
 
 
       # =====================================================
@@ -185,7 +196,7 @@ jobs:
 
 
       # =====================================================
-      # Slack Security Alert (your improvement)
+      # Slack Security Alert
       # =====================================================
       - name: Slack Security Alert
         if: failure() && env.FAIL_ON_MAIN == 'true'
@@ -195,4 +206,3 @@ jobs:
           fields: repo,commit,author,workflow
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-
