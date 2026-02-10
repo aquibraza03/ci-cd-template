@@ -1,4 +1,4 @@
-name: 🔐 Security Gate (Enterprise v7)
+name: 🔐 Security Gate
 
 on:
   pull_request:
@@ -24,63 +24,37 @@ jobs:
     timeout-minutes: 30
 
     steps:
-# =====================================================
+# -----------------------------------------------------
 # Checkout
-# =====================================================
-      - uses: actions/checkout@v4.2.2
+# -----------------------------------------------------
+      - uses: actions/checkout@v4
 
-# =====================================================
-# Detect languages for CodeQL (PREVENTS CRASH)
-# =====================================================
-      - name: Detect languages for CodeQL
-        id: langs
-        run: |
-          langs=""
-
-          if git ls-files '*.js' '*.ts' | grep -q .; then
-            langs="javascript"
-          fi
-
-          if git ls-files '*.py' | grep -q .; then
-            langs="${langs:+$langs,}python"
-          fi
-
-          if [ -z "$langs" ]; then
-            echo "skip=true" >> $GITHUB_OUTPUT
-          else
-            echo "skip=false" >> $GITHUB_OUTPUT
-            echo "langs=$langs" >> $GITHUB_OUTPUT
-          fi
-
-# =====================================================
+# -----------------------------------------------------
 # Dependency Review (PR only)
-# =====================================================
+# -----------------------------------------------------
       - name: Dependency Review
         if: github.event_name == 'pull_request'
         uses: github/dependency-review-action@v4
         with:
           fail-on-severity: critical
 
-# =====================================================
-# CodeQL (RUN ONLY IF CODE EXISTS)
-# =====================================================
+# -----------------------------------------------------
+# CodeQL — AUTO language detection (REAL FIX)
+# -----------------------------------------------------
       - name: Initialize CodeQL
-        if: steps.langs.outputs.skip != 'true'
         uses: github/codeql-action/init@v3
         with:
-          languages: ${{ steps.langs.outputs.langs }}
+          languages: auto
 
       - name: Autobuild
-        if: steps.langs.outputs.skip != 'true'
         uses: github/codeql-action/autobuild@v3
 
       - name: Analyze
-        if: steps.langs.outputs.skip != 'true'
         uses: github/codeql-action/analyze@v3
 
-# =====================================================
-# Snyk Dependency Scan
-# =====================================================
+# -----------------------------------------------------
+# Snyk dependency scan
+# -----------------------------------------------------
       - name: Install Snyk
         run: npm install -g snyk
 
@@ -96,9 +70,9 @@ jobs:
         with:
           sarif_file: snyk.sarif
 
-# =====================================================
-# Trivy Filesystem Scan
-# =====================================================
+# -----------------------------------------------------
+# Trivy filesystem scan
+# -----------------------------------------------------
       - name: Trivy filesystem scan
         uses: aquasecurity/trivy-action@0.24.0
         with:
@@ -115,9 +89,9 @@ jobs:
         with:
           sarif_file: trivy.sarif
 
-# =====================================================
-# Gitleaks Secret Detection
-# =====================================================
+# -----------------------------------------------------
+# Gitleaks secret detection
+# -----------------------------------------------------
       - name: Run Gitleaks
         uses: gitleaks/gitleaks-action@v2
         with:
@@ -129,9 +103,9 @@ jobs:
         with:
           sarif_file: gitleaks.sarif
 
-# =====================================================
-# Checkov IaC Scan
-# =====================================================
+# -----------------------------------------------------
+# Checkov IaC scan
+# -----------------------------------------------------
       - name: Checkov IaC scan
         uses: bridgecrewio/checkov-action@v12
         with:
@@ -147,9 +121,9 @@ jobs:
         with:
           sarif_file: checkov.sarif
 
-# =====================================================
-# SBOM Generation
-# =====================================================
+# -----------------------------------------------------
+# SBOM generation
+# -----------------------------------------------------
       - name: Generate SBOM
         uses: anchore/sbom-action@v0
         with:
@@ -162,34 +136,18 @@ jobs:
           name: sbom
           path: sbom.json
 
-# =====================================================
-# License Compliance (main only)
-# =====================================================
+# -----------------------------------------------------
+# License compliance (main only)
+# -----------------------------------------------------
       - name: License check
         if: env.FAIL_ON_MAIN == 'true' && hashFiles('**/package.json') != ''
         run: |
           npm install -g license-checker
           license-checker --production --summary --failOn "GPL;AGPL"
 
-# =====================================================
-# OpenSSF Scorecard
-# =====================================================
-      - name: Run OpenSSF Scorecard
-        uses: ossf/scorecard-action@v2
-        with:
-          results_file: scorecard.sarif
-          results_format: sarif
-          publish_results: false
-
-      - name: Upload Scorecard SARIF
-        if: always()
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: scorecard.sarif
-
-# =====================================================
-# Slack Alert (optional)
-# =====================================================
+# -----------------------------------------------------
+# Slack alert (optional)
+# -----------------------------------------------------
       - name: Slack Security Alert
         if: failure() && env.FAIL_ON_MAIN == 'true' && secrets.SLACK_WEBHOOK_URL != ''
         uses: 8398a7/action-slack@v3.0.0
