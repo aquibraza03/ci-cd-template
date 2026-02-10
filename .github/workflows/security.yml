@@ -28,7 +28,8 @@ jobs:
 # -----------------------------------------------------
 # Checkout
 # -----------------------------------------------------
-      - uses: actions/checkout@v4.2.2
+      - name: Checkout repository
+        uses: actions/checkout@v4.2.2
 
 # -----------------------------------------------------
 # Dependency Review (PR only)
@@ -40,12 +41,12 @@ jobs:
           fail-on-severity: critical
 
 # -----------------------------------------------------
-# Snyk
+# Snyk Dependency Scan
 # -----------------------------------------------------
       - name: Install Snyk
         run: npm install -g snyk
 
-      - name: Snyk scan
+      - name: Run Snyk scan
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: snyk test --all-projects --severity-threshold=high --sarif-file-output=snyk.sarif || true
@@ -57,7 +58,7 @@ jobs:
           sarif_file: snyk.sarif
 
 # -----------------------------------------------------
-# Trivy
+# Trivy Filesystem Scan
 # -----------------------------------------------------
       - name: Trivy filesystem scan
         uses: aquasecurity/trivy-action@0.24.0
@@ -76,20 +77,16 @@ jobs:
           sarif_file: trivy.sarif
 
 # -----------------------------------------------------
-# Gitleaks (stable manual CLI — FIXED)
+# Gitleaks Secret Scan (stable Docker method)
 # -----------------------------------------------------
-      - name: Install Gitleaks
-        run: |
-          curl -sSL https://github.com/gitleaks/gitleaks/releases/latest/download/gitleaks-linux-amd64.tar.gz \
-            | tar -xz
-          sudo mv gitleaks /usr/local/bin/
-
       - name: Run Gitleaks scan
         run: |
-          gitleaks detect \
-            --source . \
+          docker run --rm \
+            -v ${{ github.workspace }}:/repo \
+            zricethezav/gitleaks:latest detect \
+            --source=/repo \
             --report-format sarif \
-            --report-path gitleaks.sarif \
+            --report-path /repo/gitleaks.sarif \
             --exit-code 0
 
       - name: Upload Gitleaks SARIF
@@ -99,7 +96,7 @@ jobs:
           sarif_file: gitleaks.sarif
 
 # -----------------------------------------------------
-# Checkov (IaC)
+# Checkov IaC Scan
 # -----------------------------------------------------
       - name: Checkov IaC scan
         uses: bridgecrewio/checkov-action@v12
@@ -117,7 +114,7 @@ jobs:
           sarif_file: checkov.sarif
 
 # -----------------------------------------------------
-# SBOM
+# SBOM Generation
 # -----------------------------------------------------
       - name: Generate SBOM
         uses: anchore/sbom-action@v0
@@ -125,14 +122,14 @@ jobs:
           format: cyclonedx-json
           output-file: sbom.json
 
-      - name: Upload SBOM
+      - name: Upload SBOM artifact
         uses: actions/upload-artifact@v4
         with:
           name: sbom
           path: sbom.json
 
 # -----------------------------------------------------
-# Slack Alert (only on main failure)
+# Slack Alert (only if main branch fails)
 # -----------------------------------------------------
       - name: Slack Security Alert
         if: failure() && env.FAIL_ON_MAIN == 'true' && env.SLACK_WEBHOOK_URL != ''
@@ -142,6 +139,8 @@ jobs:
         with:
           status: failure
           fields: repo,commit,author,workflow
+
+
 
 
 
