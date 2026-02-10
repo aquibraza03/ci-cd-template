@@ -27,7 +27,7 @@ jobs:
 # -----------------------------------------------------
 # Checkout
 # -----------------------------------------------------
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2
 
 # -----------------------------------------------------
 # Dependency Review (PR only)
@@ -39,17 +39,20 @@ jobs:
           fail-on-severity: critical
 
 # -----------------------------------------------------
-# CodeQL — AUTO language detection (REAL FIX)
+# CodeQL — SKIP if no source code (TEMPLATE FIX)
 # -----------------------------------------------------
       - name: Initialize CodeQL
+        if: hashFiles('**/*.js','**/*.ts','**/*.jsx','**/*.tsx','**/*.py') != ''
         uses: github/codeql-action/init@v3
         with:
           languages: auto
 
       - name: Autobuild
+        if: hashFiles('**/*.js','**/*.ts','**/*.jsx','**/*.tsx','**/*.py') != ''
         uses: github/codeql-action/autobuild@v3
 
       - name: Analyze
+        if: hashFiles('**/*.js','**/*.ts','**/*.jsx','**/*.tsx','**/*.py') != ''
         uses: github/codeql-action/analyze@v3
 
 # -----------------------------------------------------
