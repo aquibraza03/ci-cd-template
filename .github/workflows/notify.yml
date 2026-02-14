@@ -1,12 +1,25 @@
 name: 📣 Production Deploy Notification
 
 on:
+  # Auto trigger after deployments
   workflow_run:
     workflows:
       - "🚀 Backend CI/CD Enterprise (AWS Mumbai)"
       - "🌐 Frontend CI/CD Enterprise (AWS-Aligned)"
       - "🚀 Microservice CI/CD Enterprise (ECS Aligned)"
     types: [completed]
+
+  # Manual trigger from GitHub UI
+  workflow_dispatch:
+    inputs:
+      service:
+        description: "Service name for manual notification"
+        required: false
+        default: "Manual Trigger"
+      environment:
+        description: "Environment URL"
+        required: false
+        default: "https://example.com"
 
 permissions:
   contents: read
@@ -16,9 +29,16 @@ jobs:
     name: Send Slack Deploy Message
     runs-on: ubuntu-latest
 
+    # Run automatically only when:
+    # - workflow_run success on main
+    # OR
+    # - manual dispatch
     if: >
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.head_branch == 'main'
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main')
+      ||
+      github.event_name == 'workflow_dispatch'
 
     env:
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -30,22 +50,28 @@ jobs:
       - name: Collect workflow data
         id: data
         run: |
-          echo "service=${{ github.event.workflow_run.name }}" >> $GITHUB_OUTPUT
-          echo "commit=${{ github.event.workflow_run.head_sha }}" >> $GITHUB_OUTPUT
-          echo "run_url=${{ github.event.workflow_run.html_url }}" >> $GITHUB_OUTPUT
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "service=${{ inputs.service }}" >> $GITHUB_OUTPUT
+            echo "commit=manual" >> $GITHUB_OUTPUT
+            echo "run_url=https://github.com/${{ github.repository }}/actions" >> $GITHUB_OUTPUT
+            echo "duration=0 min" >> $GITHUB_OUTPUT
+            echo "deployer=${{ github.actor }}" >> $GITHUB_OUTPUT
+          else
+            echo "service=${{ github.event.workflow_run.name }}" >> $GITHUB_OUTPUT
+            echo "commit=${{ github.event.workflow_run.head_sha }}" >> $GITHUB_OUTPUT
+            echo "run_url=${{ github.event.workflow_run.html_url }}" >> $GITHUB_OUTPUT
 
-          # Safe duration calculation
-          start=$(date -u -d "${{ github.event.workflow_run.created_at }}" +%s)
-          end=$(date -u -d "${{ github.event.workflow_run.updated_at }}" +%s)
-          echo "duration=$(( (end - start) / 60 )) min" >> $GITHUB_OUTPUT
+            start=$(date -u -d "${{ github.event.workflow_run.created_at }}" +%s)
+            end=$(date -u -d "${{ github.event.workflow_run.updated_at }}" +%s)
+            echo "duration=$(( (end - start) / 60 )) min" >> $GITHUB_OUTPUT
 
-          # Deployer fallback
-          author="${{ github.event.workflow_run.head_commit.author.name }}"
-          actor="${{ github.event.workflow_run.actor.login }}"
-          if [ -z "$author" ]; then
-            author="$actor"
+            author="${{ github.event.workflow_run.head_commit.author.name }}"
+            actor="${{ github.event.workflow_run.actor.login }}"
+            if [ -z "$author" ]; then
+              author="$actor"
+            fi
+            echo "deployer=$author" >> $GITHUB_OUTPUT
           fi
-          echo "deployer=$author" >> $GITHUB_OUTPUT
 
 # -----------------------------------------------------
 # Map service → production URL
@@ -53,26 +79,30 @@ jobs:
       - name: Set production URL
         id: envurl
         run: |
-          case "${{ github.event.workflow_run.name }}" in
-            *Backend*)
-              echo "url=https://api.example.com" >> $GITHUB_OUTPUT
-              ;;
-            *Frontend*)
-              echo "url=https://app.example.com" >> $GITHUB_OUTPUT
-              ;;
-            *Microservice*)
-              echo "url=https://ms.example.com" >> $GITHUB_OUTPUT
-              ;;
-            *)
-              echo "url=https://example.com" >> $GITHUB_OUTPUT
-              ;;
-          esac
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "url=${{ inputs.environment }}" >> $GITHUB_OUTPUT
+          else
+            case "${{ github.event.workflow_run.name }}" in
+              *Backend*)
+                echo "url=https://api.example.com" >> $GITHUB_OUTPUT
+                ;;
+              *Frontend*)
+                echo "url=https://app.example.com" >> $GITHUB_OUTPUT
+                ;;
+              *Microservice*)
+                echo "url=https://ms.example.com" >> $GITHUB_OUTPUT
+                ;;
+              *)
+                echo "url=https://example.com" >> $GITHUB_OUTPUT
+                ;;
+            esac
+          fi
 
 # -----------------------------------------------------
 # Slack notification
 # -----------------------------------------------------
       - name: Send Slack notification
-        if: env.SLACK_WEBHOOK_URL != ''
+        if: ${{ env.SLACK_WEBHOOK_URL != '' }}
         uses: 8398a7/action-slack@v3
         with:
           status: custom
@@ -95,3 +125,4 @@ jobs:
             }
         env:
           SLACK_WEBHOOK_URL: ${{ env.SLACK_WEBHOOK_URL }}
+
