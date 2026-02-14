@@ -62,15 +62,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      # Safe Node setup (NO cache crash)
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
-        continue-on-error: true   # ← prevents cache crash if no lockfile
+        continue-on-error: true
 
       - run: |
           cd app-examples/frontend
-          npm ci
+          npm install
           npm run lint --if-present
           npm test --if-present -- --coverage || true
 
@@ -79,6 +81,7 @@ jobs:
         with:
           name: frontend-coverage
           path: app-examples/frontend/coverage/
+          if-no-files-found: ignore
 
 # =====================================================
 # Build
@@ -92,7 +95,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -100,7 +104,7 @@ jobs:
 
       - run: |
           cd app-examples/frontend
-          npm ci
+          npm install
           npm run build
           if [ -f "next.config.js" ]; then
             npx next export
@@ -226,6 +230,7 @@ jobs:
         with:
           status: failure
           fields: repo,commit,author,workflow
+
 
 
 
