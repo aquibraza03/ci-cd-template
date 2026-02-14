@@ -25,7 +25,7 @@ env:
   NODE_VERSION: 20
   AWS_REGION: ap-south-1
   BUILD_DIR: dist
-  FRONTEND_HEALTH_URL: https://app.example.com
+  FRONTEND_HEALTH_URL: https://app.examples.com
 
 jobs:
 
