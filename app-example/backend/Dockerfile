@@ -1,6 +1,6 @@
 FROM node:20-alpine
 
-# Create non-root user
+# Create non-root users
 RUN addgroup -S nodejs && adduser -S nodeuser -G nodejs
 
 WORKDIR /app
