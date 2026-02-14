@@ -24,6 +24,7 @@ concurrency:
 env:
   NODE_VERSION: 20
   AWS_REGION: ap-south-1
+  BUILD_DIR: dist
   FRONTEND_HEALTH_URL: https://app.example.com
 
 jobs:
@@ -65,18 +66,16 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
-          cache-dependency-path: app-examples/frontend/package-lock.json
+        continue-on-error: true   # ← prevents cache crash if no lockfile
 
-      - name: Install, lint & test
-        run: |
+      - run: |
           cd app-examples/frontend
           npm ci
           npm run lint --if-present
           npm test --if-present -- --coverage || true
 
-      - name: Upload coverage
-        if: always() && hashFiles('app-examples/frontend/coverage/**') != ''
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: frontend-coverage
           path: app-examples/frontend/coverage/
@@ -97,10 +96,9 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
-          cache-dependency-path: app-examples/frontend/package-lock.json
+        continue-on-error: true
 
-      - name: Build frontend
-        run: |
+      - run: |
           cd app-examples/frontend
           npm ci
           npm run build
@@ -108,8 +106,7 @@ jobs:
             npx next export
           fi
 
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: frontend-build
           path: ${{ needs.detect.outputs.build_dir }}
@@ -229,6 +226,7 @@ jobs:
         with:
           status: failure
           fields: repo,commit,author,workflow
+
 
 
 
