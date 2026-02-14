@@ -1,5 +1,13 @@
 {
-  "name": "ci-cd-demo-microservice",
+  "name": "microservice",
   "version": "1.0.0",
-  "scripts": { "start": "node index.js" },
-  "dependencies": { "express":
+  "description": "Sample ECS microservice",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "echo \"No tests yet\" && exit 0"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}
