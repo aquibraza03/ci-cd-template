@@ -24,7 +24,6 @@ concurrency:
 env:
   NODE_VERSION: 20
   AWS_REGION: ap-south-1
-  BUILD_DIR: dist
   FRONTEND_HEALTH_URL: https://app.example.com
 
 jobs:
@@ -68,14 +67,16 @@ jobs:
           cache: npm
           cache-dependency-path: app-examples/frontend/package-lock.json
 
-      - run: |
+      - name: Install, lint & test
+        run: |
           cd app-examples/frontend
           npm ci
           npm run lint --if-present
           npm test --if-present -- --coverage || true
 
-      - uses: actions/upload-artifact@v4
-        if: always()
+      - name: Upload coverage
+        if: always() && hashFiles('app-examples/frontend/coverage/**') != ''
+        uses: actions/upload-artifact@v4
         with:
           name: frontend-coverage
           path: app-examples/frontend/coverage/
@@ -98,7 +99,8 @@ jobs:
           cache: npm
           cache-dependency-path: app-examples/frontend/package-lock.json
 
-      - run: |
+      - name: Build frontend
+        run: |
           cd app-examples/frontend
           npm ci
           npm run build
@@ -106,7 +108,8 @@ jobs:
             npx next export
           fi
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
         with:
           name: frontend-build
           path: ${{ needs.detect.outputs.build_dir }}
@@ -167,7 +170,7 @@ jobs:
           role-to-assume: ${{ secrets.AWS_GITHUB_ROLE }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Upload to S3 (cache assets)
+      - name: Upload to S3
         run: |
           aws s3 sync dist/ s3://${{ secrets.S3_PROD_BUCKET }}/ \
             --delete \
@@ -226,6 +229,7 @@ jobs:
         with:
           status: failure
           fields: repo,commit,author,workflow
+
 
 
 
