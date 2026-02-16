@@ -141,7 +141,8 @@ jobs:
             -t $ECR_REGISTRY/$ECR_REPOSITORY:latest \
             --push \
             --cache-to=type=gha,mode=max \
-            --cache-from=type=gha
+            --cache-from=type=gha \
+            app-examples/backend
 
       - name: Set image output
         id: meta
