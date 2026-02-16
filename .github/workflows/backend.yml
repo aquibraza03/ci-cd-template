@@ -142,7 +142,7 @@ jobs:
             --push \
             --cache-to=type=gha,mode=max \
             --cache-from=type=gha \
-            app-examples/backend
+            .
 
       - name: Set image output
         id: meta
