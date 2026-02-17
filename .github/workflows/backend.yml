@@ -191,7 +191,11 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Deploy to ECS
-        run: bash deploy/deploy.sh "${{ needs.build-push.outputs.image }}"
+        env:
+          CLUSTER: ${{ secrets.ECS_CLUSTER }}
+          SERVICE: ${{ secrets.ECS_SERVICE }}
+          IMAGE_URI: ${{ needs.build-push.outputs.image }}
+        run: bash deploy/deploy.sh
 
       - name: Verify health
         run: curl -f https://api.example.com/health
