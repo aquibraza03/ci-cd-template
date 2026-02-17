@@ -186,9 +186,10 @@ jobs:
 
       - name: Deploy to ECS
         env:
-          CLUSTER: ${{ secrets.ECS_CLUSTER }}
-          SERVICE: ${{ secrets.ECS_SERVICE }}
-        run: bash deploy/deploy.sh "${{ needs.build-push.outputs.image }}"
+           CLUSTER: ${{ secrets.ECS_CLUSTER }}
+           SERVICE: ${{ secrets.ECS_SERVICE }}
+           IMAGE_URI : "${{ needs.build-push.outputs.image }}"
+        run: bash deploy/deploy.sh 
 
       - name: Verify health
         if: env.HEALTH_URL != ''
