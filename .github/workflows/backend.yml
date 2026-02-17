@@ -171,38 +171,46 @@ jobs:
 
 
 # ================= DEPLOY =================
-  deploy:
-    name: 🌐 ECS Blue-Green Deploy
-    runs-on: ubuntu-latest
-    needs: build-push
-    if: github.ref == 'refs/heads/main'
+deploy:
+  name: 🌐 ECS Blue-Green Deploy
+  runs-on: ubuntu-latest
+  needs: build-push
+  if: needs.build-push.result == 'success' && github.ref == 'refs/heads/main'
 
-    environment:
-      name: production
-      url: https://api.example.com/health
+  environment:
+    name: production
 
-    steps:
-      - uses: actions/checkout@v4
+  steps:
+    - uses: actions/checkout@v4
 
-      - name: AWS OIDC Auth
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_GITHUB_ROLE }}
-          aws-region: ${{ env.AWS_REGION }}
+    - name: AWS OIDC Auth
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ secrets.AWS_GITHUB_ROLE }}
+        aws-region: ${{ env.AWS_REGION }}
 
-      - name: Deploy to ECS
-        env:
-          CLUSTER: ${{ secrets.ECS_CLUSTER }}
-          SERVICE: ${{ secrets.ECS_SERVICE }}
-          IMAGE_URI: ${{ needs.build-push.outputs.image }}
-        run: bash deploy/deploy.sh
+    # ✅ Deploy (pass IMAGE as argument + env vars)
+    - name: Deploy to ECS
+      env:
+        CLUSTER: ${{ secrets.ECS_CLUSTER }}
+        SERVICE: ${{ secrets.ECS_SERVICE }}
+      run: bash deploy/deploy.sh "${{ needs.build-push.outputs.image }}"
 
-      - name: Verify health
-        run: curl -f https://api.example.com/health
+    # ✅ Health check (use REAL URL or skip safely)
+    - name: Verify health
+      if: env.HEALTH_URL != ''
+      env:
+        HEALTH_URL: ${{ secrets.HEALTH_URL }}
+      run: curl -f "$HEALTH_URL"
 
-      - name: Rollback on failure
-        if: failure()
-        run: bash deploy/rollback.sh
+    # ✅ Rollback (pass required env vars)
+    - name: Rollback on failure
+      if: failure()
+      env:
+        CLUSTER: ${{ secrets.ECS_CLUSTER }}
+        SERVICE: ${{ secrets.ECS_SERVICE }}
+      run: bash deploy/rollback.sh
+
 
 
 # ================= FAILURE ALERT =================
