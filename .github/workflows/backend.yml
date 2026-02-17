@@ -215,7 +215,6 @@ jobs:
           fields: repo,message,commit,author,action,workflow
         env:
           SLACK_WEBHOOK_URL: ${{ env.SLACK_WEBHOOK_URL }}
-}}
 
 
 
