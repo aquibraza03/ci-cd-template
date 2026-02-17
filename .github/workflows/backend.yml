@@ -133,8 +133,10 @@ jobs:
       - name: Set image output
         id: meta
         run: |
-          echo "image=${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY }}:${{ github.sha }}" >> $GITHUB_OUTPUT
-
+          IMAGE="${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY }}:${{ github.sha }}"
+          echo "IMAGE=$IMAGE"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          
       - name: Generate SBOM
         uses: anchore/sbom-action@v0
         with:
