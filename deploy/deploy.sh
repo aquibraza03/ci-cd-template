@@ -29,6 +29,11 @@ CURRENT_TASK_DEF_ARN=$(aws ecs describe-services \
   --query "services[0].taskDefinition" \
   --output text)
 
+if [[ "$CURRENT_TASK_DEF_ARN" == "None" || -z "$CURRENT_TASK_DEF_ARN" ]]; then
+  echo "❌ ECS service has no task definition. Create service once in AWS console."
+  exit 1
+fi
+
 echo "Current task definition: $CURRENT_TASK_DEF_ARN"
 
 # ================= CREATE NEW REVISION =================
@@ -54,7 +59,6 @@ aws ecs update-service \
   --service "$SERVICE" \
   --task-definition "$NEW_TASK_DEF_ARN" \
   --force-new-deployment \
-  --deployment-circuit-breaker "enable=true,rollback=true" \
   >/dev/null
 
 # ================= WAIT FOR ECS STABILITY =================
@@ -133,4 +137,5 @@ fi
 
 # ================= FINAL EXIT =================
 [[ "$STATUS" == "success" ]] && exit 0 || exit 1
+
 
