@@ -62,7 +62,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Safe Node setup (NO cache crash)
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -166,6 +165,14 @@ jobs:
           name: frontend-build
           path: dist
 
+      # ================= DEBUG SECRETS =================
+      - name: DEBUG SECRETS
+        run: |
+          echo "ROLE=${{ secrets.AWS_GITHUB_ROLE }}"
+          echo "BUCKET=${{ secrets.S3_PROD_BUCKET }}"
+          echo "DIST=${{ secrets.CLOUDFRONT_DISTRIBUTION }}"
+      # =================================================
+
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_GITHUB_ROLE }}
@@ -230,6 +237,7 @@ jobs:
         with:
           status: failure
           fields: repo,commit,author,workflow
+
 
 
 
