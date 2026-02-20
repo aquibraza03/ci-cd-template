@@ -20,7 +20,7 @@ env:
   CONTAINER_NAME: microservice-container
 
 concurrency:
-  group: microservice-${{ github.ref }}
+  group: microservice-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -45,12 +45,7 @@ jobs:
 
       - name: Run tests
         working-directory: app-examples/microservice
-        run: |
-          if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
-            npm test
-          else
-            npm test || true
-          fi
+        run: npm test  # Strict failure for PRs too
 
 # ================= BUILD =================
   build:
@@ -80,7 +75,7 @@ jobs:
       - name: Build & Push Docker image
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
-          REPO: ${{ secrets.ECR_REPOSITORY_MICROSERVICE }}
+          REPO: microservice-app
           TAG: ${{ github.sha }}
         run: |
           docker buildx build \
@@ -94,7 +89,11 @@ jobs:
 
       - name: Set image output
         id: meta
-        run: echo "image=${{ steps.ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY_MICROSERVICE }}:${{ github.sha }}" >> $GITHUB_OUTPUT
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          REPO: microservice-app
+        run: |
+          echo "image=$REGISTRY/$REPO:${{ github.sha }}" >> $GITHUB_OUTPUT
 
 # ================= DEPLOY =================
   deploy:
@@ -137,7 +136,17 @@ jobs:
           wait-for-service-stability: true
 
       - name: Health check
-        run: curl -f ${{ secrets.MICROSERVICE_HEALTH_URL }}
+        timeout-minutes: 2
+        run: |
+          for i in {1..10}; do
+            if curl -f ${{ secrets.MICROSERVICE_HEALTH_URL }}; then
+              exit 0
+            fi
+            echo "Health check attempt $i failed, retrying in 10s..."
+            sleep 10
+          done
+          echo "All health checks failed"
+          exit 1
 
 # ================= NOTIFY =================
   notify:
@@ -153,6 +162,7 @@ jobs:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         with:
           status: failure
+
 
 
 
