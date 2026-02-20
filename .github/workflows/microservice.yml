@@ -45,7 +45,7 @@ jobs:
 
       - name: Run tests
         working-directory: app-examples/microservice
-        run: npm test  # Strict failure for PRs too
+        run: npm test
 
 # ================= BUILD =================
   build:
@@ -75,7 +75,7 @@ jobs:
       - name: Build & Push Docker image
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
-          REPO: microservice-app
+          REPO: ${{ secrets.ECR_REPOSITORY_MICROSERVICE }}
           TAG: ${{ github.sha }}
         run: |
           docker buildx build \
@@ -89,11 +89,7 @@ jobs:
 
       - name: Set image output
         id: meta
-        env:
-          REGISTRY: ${{ steps.ecr.outputs.registry }}
-          REPO: microservice-app
-        run: |
-          echo "image=$REGISTRY/$REPO:${{ github.sha }}" >> $GITHUB_OUTPUT
+        run: echo "image=${{ steps.ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY_MICROSERVICE }}:${{ github.sha }}" >> $GITHUB_OUTPUT
 
 # ================= DEPLOY =================
   deploy:
@@ -135,7 +131,7 @@ jobs:
           cluster: ${{ secrets.ECS_CLUSTER }}
           wait-for-service-stability: true
 
-      - name: Health check
+      - name: Health check (with retry)
         timeout-minutes: 2
         run: |
           for i in {1..10}; do
