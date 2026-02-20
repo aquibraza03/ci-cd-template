@@ -85,10 +85,12 @@ jobs:
         run: |
           docker buildx build \
             --platform linux/amd64 \
-            -t $REGISTRY/$REPO:$TAG \
-            -t $REGISTRY/$REPO:latest \
+            --cache-from type=gha \
+            --cache-to type=gha,mode=max \
+            -t "$REGISTRY/$REPO:$TAG" \
+            -t "$REGISTRY/$REPO:latest" \
             --push \
-            app-examples/microservice
+            ./app-examples/microservice
 
       - name: Set image output
         id: meta
@@ -151,6 +153,7 @@ jobs:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         with:
           status: failure
+
 
 
 
