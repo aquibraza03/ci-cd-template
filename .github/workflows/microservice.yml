@@ -75,7 +75,7 @@ jobs:
       - name: Build & Push Docker image
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
-          REPO: ${{ secrets.ECR_REPOSITORY_MICROSERVICE }}
+          REPO: ${{ secrets.ECR_REPOSITORY_MICROSERVICE }}  # ✅ Secret-based
           TAG: ${{ github.sha }}
         run: |
           docker buildx build \
@@ -89,7 +89,13 @@ jobs:
 
       - name: Set image output
         id: meta
-        run: echo "image=${{ steps.ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY_MICROSERVICE }}:${{ github.sha }}" >> $GITHUB_OUTPUT
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          REPO: ${{ secrets.ECR_REPOSITORY_MICROSERVICE }}  # ✅ Secret-based
+        run: |
+          IMAGE_URI="$REGISTRY/$REPO:${{ github.sha }}"
+          echo "image=$IMAGE_URI" >> $GITHUB_OUTPUT
+          echo "Built image: $IMAGE_URI"
 
 # ================= DEPLOY =================
   deploy:
@@ -117,14 +123,14 @@ jobs:
 
       - name: Render new task definition
         id: task
-        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        uses: aws-actions/amazon-ecs-render-task-definition@v1  # ✅ Fixed: v1
         with:
           task-definition: task-def.json
           container-name: ${{ env.CONTAINER_NAME }}
           image: ${{ needs.build.outputs.image }}
 
       - name: Deploy ECS service
-        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
           task-definition: ${{ steps.task.outputs.task-definition }}
           service: ${{ secrets.ECS_SERVICE_MICROSERVICE }}
@@ -136,12 +142,13 @@ jobs:
         run: |
           for i in {1..10}; do
             if curl -f ${{ secrets.MICROSERVICE_HEALTH_URL }}; then
+              echo "✅ Health check passed"
               exit 0
             fi
             echo "Health check attempt $i failed, retrying in 10s..."
             sleep 10
           done
-          echo "All health checks failed"
+          echo "❌ All health checks failed"
           exit 1
 
 # ================= NOTIFY =================
@@ -153,11 +160,14 @@ jobs:
 
     steps:
       - name: Send Slack alert
+        if: env.SLACK_WEBHOOK_URL != ''
         uses: 8398a7/action-slack@v3
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         with:
           status: failure
+          fields: repo,message,commit,author,action,workflow
+
 
 
 
