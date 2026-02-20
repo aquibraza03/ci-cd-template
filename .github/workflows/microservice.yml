@@ -54,7 +54,7 @@ jobs:
     needs: test
     timeout-minutes: 20
     outputs:
-      image: ${{ steps.meta.outputs.image }}
+      image: ${{ steps.build.outputs.image }}
 
     steps:
       - uses: actions/checkout@v4
@@ -73,9 +73,10 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build & Push Docker image
+        id: build
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
-          REPO: ${{ secrets.ECR_REPOSITORY_MICROSERVICE }}  # ✅ Secret-based
+          REPO: ${{ secrets.ECR_REPOSITORY_MICROSERVICE }}
           TAG: ${{ github.sha }}
         run: |
           docker buildx build \
@@ -86,16 +87,8 @@ jobs:
             -t "$REGISTRY/$REPO:latest" \
             --push \
             ./app-examples/microservice
-
-      - name: Set image output
-        id: meta
-        env:
-          REGISTRY: ${{ steps.ecr.outputs.registry }}
-          REPO: ${{ secrets.ECR_REPOSITORY_MICROSERVICE }}  # ✅ Secret-based
-        run: |
-          IMAGE_URI="$REGISTRY/$REPO:${{ github.sha }}"
-          echo "image=$IMAGE_URI" >> $GITHUB_OUTPUT
-          echo "Built image: $IMAGE_URI"
+          
+          echo "image=$REGISTRY/$REPO:$TAG" >> $GITHUB_OUTPUT
 
 # ================= DEPLOY =================
   deploy:
@@ -123,7 +116,7 @@ jobs:
 
       - name: Render new task definition
         id: task
-        uses: aws-actions/amazon-ecs-render-task-definition@v1  # ✅ Fixed: v1
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
         with:
           task-definition: task-def.json
           container-name: ${{ env.CONTAINER_NAME }}
@@ -167,6 +160,7 @@ jobs:
         with:
           status: failure
           fields: repo,message,commit,author,action,workflow
+
 
 
 
