@@ -50,7 +50,6 @@ jobs:
             echo "build_dir=app-examples/frontend/build" >> $GITHUB_OUTPUT
           else
             echo "build_dir=app-examples/frontend/dist" >> $GITHUB_OUTPUT
-          fi
 
 # =====================================================
 # Test
@@ -152,6 +151,11 @@ jobs:
     needs: build
     if: github.ref == 'refs/heads/main'
 
+    # ⭐ CRITICAL FIX — job-level OIDC permission
+    permissions:
+      id-token: write
+      contents: read
+
     environment:
       name: production
       url: ${{ env.FRONTEND_HEALTH_URL }}
@@ -162,18 +166,18 @@ jobs:
           name: frontend-build
           path: dist
 
-      # ✅ REQUIRED — OIDC authentication
+      # ✅ OIDC authentication
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_GITHUB_ROLE }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # Optional sanity check (safe in prod)
+      # ✅ Sanity check (keep for now)
       - name: Verify AWS auth
         run: aws sts get-caller-identity
 
-      # Static assets (long cache)
+      # Static assets
       - name: Upload to S3 - Static Assets
         run: |
           aws s3 sync dist/ s3://${{ secrets.S3_PROD_BUCKET }}/ \
@@ -181,7 +185,7 @@ jobs:
             --cache-control "public,max-age=31536000,immutable" \
             --exclude "*.html"
 
-      # HTML (no cache)
+      # HTML files
       - name: Upload to S3 - HTML Files
         run: |
           aws s3 sync dist/ s3://${{ secrets.S3_PROD_BUCKET }}/ \
@@ -221,6 +225,7 @@ jobs:
         with:
           status: failure
           fields: repo,commit,author,workflow
+
 
 
 
