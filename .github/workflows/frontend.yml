@@ -145,7 +145,7 @@ jobs:
           netlify deploy --dir=dist --auth=$NETLIFY_AUTH_TOKEN
 
 # =====================================================
-# Production Deploy (AWS S3 + CloudFront) - FIXED!
+# Production Deploy (AWS S3 + CloudFront)
 # =====================================================
   deploy:
     runs-on: ubuntu-latest
@@ -162,53 +162,35 @@ jobs:
           name: frontend-build
           path: dist
 
-      # =====================================================
-      # FRESH OIDC AUTH + DEBUG
-      # =====================================================
+      # ✅ REQUIRED — OIDC authentication
       - name: Configure AWS Credentials
-        id: aws-auth
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_GITHUB_ROLE }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: DEBUG - Verify Secrets & Auth
-        env:
-          AWS_ACCESS_KEY_ID: ${{ steps.aws-auth.outputs.aws-access-key-id }}
-          AWS_SECRET_ACCESS_KEY: ${{ steps.aws-auth.outputs.aws-secret-access-key }}
-          AWS_SESSION_TOKEN: ${{ steps.aws-auth.outputs.aws-session-token }}
-        run: |
-          echo "✅ Role: ${{ secrets.AWS_GITHUB_ROLE }}"
-          echo "✅ Bucket: ${{ secrets.S3_PROD_BUCKET }}"
-          echo "✅ CF Dist: ${{ secrets.CLOUDFRONT_DISTRIBUTION }}"
-          aws sts get-caller-identity
-          aws s3 ls s3://${{ secrets.S3_PROD_BUCKET }}/ --region ap-south-1 || echo "Bucket empty OK"
+      # Optional sanity check (safe in prod)
+      - name: Verify AWS auth
+        run: aws sts get-caller-identity
 
-      # =====================================================
-      # SINGLE-LINE S3 SYNC (NO MORE MULTI-LINE BUG!)
-      # =====================================================
+      # Static assets (long cache)
       - name: Upload to S3 - Static Assets
-        env:
-          AWS_ACCESS_KEY_ID: ${{ steps.aws-auth.outputs.aws-access-key-id }}
-          AWS_SECRET_ACCESS_KEY: ${{ steps.aws-auth.outputs.aws-secret-access-key }}
-          AWS_SESSION_TOKEN: ${{ steps.aws-auth.outputs.aws-session-token }}
-        run: aws s3 sync dist/ s3://${{ secrets.S3_PROD_BUCKET }}/ --delete --cache-control "public,max-age=31536000,immutable" --exclude "*.html" --region ap-south-1
+        run: |
+          aws s3 sync dist/ s3://${{ secrets.S3_PROD_BUCKET }}/ \
+            --delete \
+            --cache-control "public,max-age=31536000,immutable" \
+            --exclude "*.html"
 
+      # HTML (no cache)
       - name: Upload to S3 - HTML Files
-        env:
-          AWS_ACCESS_KEY_ID: ${{ steps.aws-auth.outputs.aws-access-key-id }}
-          AWS_SECRET_ACCESS_KEY: ${{ steps.aws-auth.outputs.aws-secret-access-key }}
-          AWS_SESSION_TOKEN: ${{ steps.aws-auth.outputs.aws-session-token }}
-        run: aws s3 sync dist/ s3://${{ secrets.S3_PROD_BUCKET }}/ --cache-control "no-cache" --include "*.html" --region ap-south-1
+        run: |
+          aws s3 sync dist/ s3://${{ secrets.S3_PROD_BUCKET }}/ \
+            --delete \
+            --cache-control "no-cache" \
+            --include "*.html"
 
-      # =====================================================
-      # CLOUDFRONT INVALIDATION
-      # =====================================================
+      # CloudFront invalidation
       - name: CloudFront Invalidation
-        env:
-          AWS_ACCESS_KEY_ID: ${{ steps.aws-auth.outputs.aws-access-key-id }}
-          AWS_SECRET_ACCESS_KEY: ${{ steps.aws-auth.outputs.aws-secret-access-key }}
-          AWS_SESSION_TOKEN: ${{ steps.aws-auth.outputs.aws-session-token }}
         run: |
           aws cloudfront create-invalidation \
             --distribution-id ${{ secrets.CLOUDFRONT_DISTRIBUTION }} \
@@ -218,15 +200,6 @@ jobs:
       - name: Verify frontend health
         timeout-minutes: 5
         run: curl -f --max-time 30 ${{ env.FRONTEND_HEALTH_URL }} || echo "Health check optional"
-
-      - name: Slack success notification
-        if: success() && env.SLACK_WEBHOOK_URL != ''
-        uses: 8398a7/action-slack@v3
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-        with:
-          status: success
-          fields: repo,commit,author,workflow
 
 # =====================================================
 # Failure Alert
@@ -247,7 +220,8 @@ jobs:
           SLACK_WEBHOOK_URL: ${{ env.SLACK_WEBHOOK_URL }}
         with:
           status: failure
-          fields: repo,message,commit,author,workflow
+          fields: repo,commit,author,workflow
+
 
 
 
