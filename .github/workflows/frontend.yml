@@ -42,14 +42,16 @@ jobs:
 
       - id: meta
         run: |
+          set -e
           if [ -f "app-examples/frontend/next.config.js" ]; then
-            echo "build_dir=app-examples/frontend/out" >> $GITHUB_OUTPUT
+            echo "build_dir=app-examples/frontend/out" >> "$GITHUB_OUTPUT"
           elif [ -d "app-examples/frontend/dist" ]; then
-            echo "build_dir=app-examples/frontend/dist" >> $GITHUB_OUTPUT
+            echo "build_dir=app-examples/frontend/dist" >> "$GITHUB_OUTPUT"
           elif [ -d "app-examples/frontend/build" ]; then
-            echo "build_dir=app-examples/frontend/build" >> $GITHUB_OUTPUT
+            echo "build_dir=app-examples/frontend/build" >> "$GITHUB_OUTPUT"
           else
-            echo "build_dir=app-examples/frontend/dist" >> $GITHUB_OUTPUT
+            echo "build_dir=app-examples/frontend/dist" >> "$GITHUB_OUTPUT"
+          fi
 
 # =====================================================
 # Test
@@ -68,7 +70,8 @@ jobs:
           cache: npm
         continue-on-error: true
 
-      - run: |
+      - name: Install, lint, test
+        run: |
           cd app-examples/frontend
           npm install
           npm run lint --if-present
@@ -100,7 +103,8 @@ jobs:
           cache: npm
         continue-on-error: true
 
-      - run: |
+      - name: Build frontend
+        run: |
           cd app-examples/frontend
           npm install
           npm run build
@@ -151,7 +155,7 @@ jobs:
     needs: build
     if: github.ref == 'refs/heads/main'
 
-    # ⭐ CRITICAL FIX — job-level OIDC permission
+    # ⭐ CRITICAL — job-level OIDC permission
     permissions:
       id-token: write
       contents: read
@@ -166,18 +170,15 @@ jobs:
           name: frontend-build
           path: dist
 
-      # ✅ OIDC authentication
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_GITHUB_ROLE }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # ✅ Sanity check (keep for now)
       - name: Verify AWS auth
         run: aws sts get-caller-identity
 
-      # Static assets
       - name: Upload to S3 - Static Assets
         run: |
           aws s3 sync dist/ s3://${{ secrets.S3_PROD_BUCKET }}/ \
@@ -185,7 +186,6 @@ jobs:
             --cache-control "public,max-age=31536000,immutable" \
             --exclude "*.html"
 
-      # HTML files
       - name: Upload to S3 - HTML Files
         run: |
           aws s3 sync dist/ s3://${{ secrets.S3_PROD_BUCKET }}/ \
@@ -193,7 +193,6 @@ jobs:
             --cache-control "no-cache" \
             --include "*.html"
 
-      # CloudFront invalidation
       - name: CloudFront Invalidation
         run: |
           aws cloudfront create-invalidation \
@@ -225,6 +224,7 @@ jobs:
         with:
           status: failure
           fields: repo,commit,author,workflow
+
 
 
 
