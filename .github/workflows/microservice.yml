@@ -76,7 +76,7 @@ jobs:
         id: build
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
-          REPO: ${{ secrets.ECR_REPOSITORY_MICROSERVICE }}
+          REPO: ${{ vars.ECR_REPOSITORY_MICROSERVICE }}
           TAG: ${{ github.sha }}
         run: |
           docker buildx build \
