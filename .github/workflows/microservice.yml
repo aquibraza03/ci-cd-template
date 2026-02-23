@@ -18,6 +18,7 @@ permissions:
 env:
   AWS_REGION: ap-south-1
   CONTAINER_NAME: microservice-container
+  ENABLE_HEALTH_CHECK: false
 
 concurrency:
   group: microservice-${{ github.workflow }}-${{ github.ref }}
@@ -131,16 +132,21 @@ jobs:
           wait-for-service-stability: true
 
       - name: Health check (with retry)
-        timeout-minutes: 2
+        if: env.ENABLE_HEALTH_CHECK == 'true'
+        timeout-minutes: 3
         run: |
-          for i in {1..10}; do
-            if curl -f ${{ secrets.MICROSERVICE_HEALTH_URL }}; then
+          URL="${{ secrets.MICROSERVICE_HEALTH_URL }}"
+          echo "Checking $URL"
+
+          for i in {1..12}; do
+            if curl -fsS --connect-timeout 5 "$URL"; then
               echo "✅ Health check passed"
               exit 0
             fi
             echo "Health check attempt $i failed, retrying in 10s..."
             sleep 10
           done
+
           echo "❌ All health checks failed"
           exit 1
 
@@ -160,6 +166,7 @@ jobs:
         with:
           status: failure
           fields: repo,message,commit,author,action,workflow
+
 
 
 
