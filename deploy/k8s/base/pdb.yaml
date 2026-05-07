@@ -1,0 +1,16 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ${SERVICE_NAME}
+  namespace: ${K8S_NAMESPACE}
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: microservice-platform
+    app.kubernetes.io/name: ${SERVICE_NAME}
+    app.kubernetes.io/instance: ${SERVICE_NAME}
+spec:
+  minAvailable: ${PDB_MIN_AVAILABLE}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: ${SERVICE_NAME}

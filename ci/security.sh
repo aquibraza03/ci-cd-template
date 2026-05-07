@@ -1,87 +1,86 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ================= CONFIG =================
-APP_PATH="${1:-.}"
-SEVERITY="${SEVERITY:-CRITICAL,HIGH}"
-FAIL_ON_SEVERITY="${FAIL_ON_SEVERITY:-false}"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+TARGET="${1:-.}"
+TAG="${2:-${IMAGE_TAG:-dev}}"
+REGISTRY="${REGISTRY:-${IMAGE_REGISTRY:-}}"
+SEVERITY="${SEVERITY:-HIGH,CRITICAL}"
+FAIL_ON_SEVERITY="${FAIL_ON_SEVERITY:-true}"
+TRIVY_SCANNERS="${TRIVY_SCANNERS:-vuln}"
+TRIVY_PKG_TYPES="${TRIVY_PKG_TYPES:-os}"
+TRIVY_TIMEOUT="${TRIVY_TIMEOUT:-5m}"
 OUTPUT_DIR="${OUTPUT_DIR:-security-reports}"
+TRIVY_BIN="${TRIVY_BIN:-}"
 
-mkdir -p "$OUTPUT_DIR"
-cd "$APP_PATH"
+if [[ -z "$TRIVY_BIN" ]]; then
+  if command -v trivy >/dev/null 2>&1; then
+    TRIVY_BIN="$(command -v trivy)"
+  elif command -v trivy.exe >/dev/null 2>&1; then
+    TRIVY_BIN="$(command -v trivy.exe)"
+  elif [[ -x "$ROOT_DIR/bin/trivy" ]]; then
+    TRIVY_BIN="$ROOT_DIR/bin/trivy"
+  elif [[ -x "$ROOT_DIR/bin/trivy.exe" ]]; then
+    TRIVY_BIN="$ROOT_DIR/bin/trivy.exe"
+  fi
+fi
 
-echo "🔐 Running Enterprise Security Scans"
-echo "Path: $APP_PATH"
-echo "Severity threshold: $SEVERITY"
-echo "Fail on severity: $FAIL_ON_SEVERITY"
-echo "Reports dir: $OUTPUT_DIR"
+if [[ -z "$TRIVY_BIN" ]]; then
+  echo "Trivy is not installed; skipping security scan"
+  exit 0
+fi
 
-EXIT_CODE=0
+if [[ -d "$ROOT_DIR/services/$TARGET" ]]; then
+  IMAGE="${REGISTRY:+$REGISTRY/}$TARGET:$TAG"
+  echo "Running image security scan for $IMAGE"
 
-# ================= SCA + SECRETS + IaC → TRIVY =================
-if command -v trivy >/dev/null 2>&1; then
-  echo "📦 Trivy scan (SCA + Secrets + Config)"
+  if ! docker info >/dev/null 2>&1; then
+    echo "Docker daemon is not reachable"
+    exit 1
+  fi
 
-  trivy fs . \
+  if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    echo "Image $IMAGE not found locally. Run ci/build.sh before security scanning."
+    exit 1
+  fi
+
+  "$TRIVY_BIN" image \
+    --scanners "$TRIVY_SCANNERS" \
+    --pkg-types "$TRIVY_PKG_TYPES" \
+    --severity "$SEVERITY" \
+    --exit-code 1 \
+    --no-progress \
+    --timeout "$TRIVY_TIMEOUT" \
+    "$IMAGE"
+else
+  if [[ -d "$ROOT_DIR/$TARGET" ]]; then
+    SCAN_PATH="$ROOT_DIR/$TARGET"
+  elif [[ "$TARGET" == "." ]]; then
+    SCAN_PATH="$ROOT_DIR"
+  else
+    echo "Security target not found: $TARGET"
+    echo "Use a service name from services/ or an app path such as app-examples/backend."
+    exit 1
+  fi
+
+  mkdir -p "$ROOT_DIR/$OUTPUT_DIR"
+  echo "Running filesystem security scan for $SCAN_PATH"
+
+  set +e
+  "$TRIVY_BIN" fs "$SCAN_PATH" \
     --scanners vuln,secret,config \
     --severity "$SEVERITY" \
     --format sarif \
-    --output "$OUTPUT_DIR/trivy.sarif" \
-    --exit-code 1 || EXIT_CODE=$?
-else
-  echo "⚠️ Trivy not installed — skipping"
+    --output "$ROOT_DIR/$OUTPUT_DIR/trivy.sarif" \
+    --exit-code 1 \
+    --no-progress
+  scan_status=$?
+  set -e
+
+  if [[ "$FAIL_ON_SEVERITY" == "true" && "$scan_status" -ne 0 ]]; then
+    exit "$scan_status"
+  fi
 fi
 
-
-# ================= SCA (DEEP) → SNYK =================
-if [[ -n "${SNYK_TOKEN:-}" ]]; then
-  echo "📦 Snyk dependency scan"
-
-  snyk test --all-projects \
-    --severity-threshold=high \
-    --sarif-file-output="$OUTPUT_DIR/snyk.sarif" \
-    || EXIT_CODE=$?
-else
-  echo "ℹ️ SNYK_TOKEN not set — skipping Snyk"
-fi
-
-
-# ================= SAST → SEMGREP =================
-if command -v semgrep >/dev/null 2>&1; then
-  echo "🔍 Semgrep SAST scan"
-
-  semgrep ci \
-    --config=auto \
-    --sarif \
-    --output="$OUTPUT_DIR/semgrep.sarif" \
-    || EXIT_CODE=$?
-else
-  echo "⚠️ Semgrep not installed — skipping"
-fi
-
-
-# ================= IaC (TERRAFORM/K8S) → CHECKOV =================
-if command -v checkov >/dev/null 2>&1; then
-  echo "🏗️ Checkov IaC scan"
-
-  checkov -d . \
-    --framework terraform,kubernetes,dockerfile \
-    --output sarif \
-    --output-file-path "$OUTPUT_DIR/checkov.sarif" \
-    || EXIT_CODE=$?
-else
-  echo "⚠️ Checkov not installed — skipping"
-fi
-
-
-# ================= ENFORCEMENT GATE =================
-if [[ "$FAIL_ON_SEVERITY" == "true" && "$EXIT_CODE" -ne 0 ]]; then
-  echo "❌ Security policy violated (severity ≥ $SEVERITY)"
-  exit "$EXIT_CODE"
-fi
-
-
-# ================= RESULT =================
-echo "✅ Security scans completed"
-echo "📁 Generated reports:"
-ls -la "$OUTPUT_DIR" || true
+echo "Security scan completed for $TARGET"

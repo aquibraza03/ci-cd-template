@@ -91,7 +91,7 @@ jobs:
           retention-days: 7
 
       - name: Local security scan
-        run: bash ci/security.sh backend || true
+        run: bash ci/security.sh app-examples/backend || true
 
 # ================= BUILD & PUSH =================
   build-push:

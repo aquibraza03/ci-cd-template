@@ -1,0 +1,49 @@
+pipeline {
+  agent any
+
+  parameters {
+    string(name: 'IMAGE_REGISTRY', defaultValue: 'local', description: 'Image registry')
+    string(name: 'IMAGE_TAG', defaultValue: 'dev', description: 'Image tag')
+  }
+
+  environment {
+    SERVICE_NAME = "adservice"
+    IMAGE_REGISTRY = "${params.IMAGE_REGISTRY}"
+    REGISTRY = "${params.IMAGE_REGISTRY}"
+    IMAGE_TAG = "${params.IMAGE_TAG}"
+  }
+
+  stages {
+    stage('Validate') {
+      steps {
+        sh 'chmod +x ci/*.sh deploy/k8s/*.sh'
+        sh './ci/policy.sh "${SERVICE_NAME}"'
+        sh './ci/validate-service.sh "${SERVICE_NAME}"'
+      }
+    }
+
+    stage('Test') {
+      steps {
+        sh './ci/test.sh "${SERVICE_NAME}"'
+      }
+    }
+
+    stage('Build') {
+      steps {
+        sh './ci/build.sh "${SERVICE_NAME}" "${IMAGE_TAG}"'
+      }
+    }
+
+    stage('Security Scan') {
+      steps {
+        sh './ci/security.sh "${SERVICE_NAME}" "${IMAGE_TAG}"'
+      }
+    }
+
+    stage('Deploy Render') {
+      steps {
+        sh 'RENDER_ONLY=true RENDER_OUTPUT_DIR="build/rendered/${SERVICE_NAME}" ./deploy/k8s/deploy.sh "${SERVICE_NAME}"'
+      }
+    }
+  }
+}

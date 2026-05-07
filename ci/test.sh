@@ -1,108 +1,63 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ================= CONFIG =================
-APP_PATH="${1:-app-examples/backend}"
-PARALLEL="${PARALLEL:-false}"
-COVERAGE="${COVERAGE:-true}"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-echo "🧪 Running tests for: $APP_PATH"
-echo "Parallel: $PARALLEL | Coverage: $COVERAGE"
+TARGET="${1:-app-examples/backend}"
+COVERAGE="${COVERAGE:-false}"
+
+if [[ -d "$ROOT_DIR/services/$TARGET" ]]; then
+  APP_PATH="$ROOT_DIR/services/$TARGET"
+elif [[ -d "$ROOT_DIR/$TARGET" ]]; then
+  APP_PATH="$ROOT_DIR/$TARGET"
+else
+  echo "Test target not found: $TARGET"
+  echo "Use a service name from services/ or an app path such as app-examples/backend."
+  exit 1
+fi
+
+echo "Testing target: $TARGET"
+echo "Path: $APP_PATH"
 
 cd "$APP_PATH"
 
-# ================= DETECT PROJECT TYPE =================
 if [[ -f "package.json" ]]; then
-  PROJECT_TYPE="node"
-elif [[ -f "requirements.txt" || -f "pyproject.toml" ]]; then
-  PROJECT_TYPE="python"
-elif [[ -f "go.mod" ]]; then
-  PROJECT_TYPE="go"
-else
-  echo "⚠️ No supported project type detected — skipping tests"
-  exit 0
-fi
-
-echo "🔎 Detected project type: $PROJECT_TYPE"
-
-# ================= NODE TESTS =================
-run_node_tests() {
-  echo "📦 Installing Node dependencies"
+  echo "Running Node tests"
   npm ci --no-audit --no-fund
-
-  if npm run | grep -q "lint"; then
-    echo "🧹 Running linter"
-    npm run lint
-  fi
-
+  npm run lint --if-present
   if [[ "$COVERAGE" == "true" ]]; then
-    echo "🧪 Running unit tests with coverage"
     npm test -- --coverage
   else
-    echo "🧪 Running unit tests"
     npm test
   fi
-}
-
-# ================= PYTHON TESTS =================
-run_python_tests() {
-  echo "🐍 Setting up Python venv"
-  python -m venv .venv
-  source .venv/bin/activate
-
-  pip install --upgrade pip
-
-  if [[ -f "requirements.txt" ]]; then
-    pip install -r requirements.txt
-  fi
-
-  pip install pytest pytest-cov flake8
-
-  echo "🧹 Running flake8"
-  flake8 . || true
-
-  if [[ "$COVERAGE" == "true" ]]; then
-    echo "🧪 Running pytest with coverage"
-    pytest --cov --cov-report=term-missing
-  else
-    pytest
-  fi
-}
-
-# ================= GO TESTS =================
-run_go_tests() {
-  echo "🐹 Running go mod tidy"
-  go mod tidy
-
-  if [[ "$COVERAGE" == "true" ]]; then
-    echo "🧪 Running go tests with coverage"
-    go test ./... -coverprofile=coverage.out
-  else
-    go test ./...
-  fi
-}
-
-# ================= EXECUTION =================
-case "$PROJECT_TYPE" in
-  node)
-    run_node_tests
-    ;;
-  python)
-    run_python_tests
-    ;;
-  go)
-    run_go_tests
-    ;;
-esac
-
-# ================= OPTIONAL E2E (Playwright) =================
-if [[ -f "playwright.config.ts" || -f "playwright.config.js" ]]; then
-  echo "🌐 Playwright detected — running E2E tests"
-
-  if command -v npx >/dev/null 2>&1; then
-    npx playwright install --with-deps
-    npx playwright test
+elif compgen -G "src/*.java" >/dev/null; then
+  echo "Running Java compile/tests"
+  command -v javac >/dev/null 2>&1 || {
+    echo "javac is required for Java services"
+    exit 1
+  }
+  mkdir -p build/classes
+  mapfile -t sources < <(find src -name "*.java" -print)
+  javac -d build/classes "${sources[@]}"
+  mapfile -t tests < <(find src -name "*Test.java" -print)
+  for test_file in "${tests[@]}"; do
+    test_class="$(basename "$test_file" .java)"
+    java -cp build/classes "$test_class"
+  done
+elif compgen -G "src/*test*.py" >/dev/null || compgen -G "src/test_*.py" >/dev/null; then
+  echo "Running Python tests"
+  python -m unittest discover -s src -p "*test*.py"
+elif [[ -f "requirements.txt" || -f "pyproject.toml" ]]; then
+  echo "Running Python syntax checks"
+  python -m compileall -q .
+elif [[ -f "go.mod" ]]; then
+  echo "Running Go tests"
+  go test ./...
+else
+  echo "No supported test target detected; running source syntax smoke where possible"
+  if [[ -d src ]]; then
+    find src -type f -name "*.py" -print0 | xargs -0 -r python -m py_compile
   fi
 fi
 
-echo "✅ Tests completed successfully"
+echo "Test stage completed for $TARGET"

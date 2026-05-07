@@ -1,0 +1,32 @@
+name: emailservice
+language: python
+
+docker:
+  context: .
+  port: 8080
+
+deploy:
+  type: k8s
+  serviceType: NodePort
+  servicePort: 80
+  healthcheck: /health
+  readiness: /ready
+  probes:
+    readiness:
+      initialDelaySeconds: 10
+      periodSeconds: 5
+      timeoutSeconds: 2
+    liveness:
+      initialDelaySeconds: 30
+      periodSeconds: 10
+      timeoutSeconds: 2
+
+ci:
+  run_tests: true
+  run_security: true
+
+demo:
+  source: GoogleCloudPlatform/microservices-demo
+  original_protocol: grpc
+  original_language: python
+  adaptation: http-contract-wrapper

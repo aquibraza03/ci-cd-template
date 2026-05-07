@@ -1,0 +1,139 @@
+name: Platform Services CI
+
+on:
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "services/**"
+      - "ci/**"
+      - "deploy/k8s/**"
+      - ".github/workflows/services.yml"
+  push:
+    paths:
+      - "services/**"
+      - "ci/**"
+      - "deploy/k8s/**"
+      - ".github/workflows/services.yml"
+  workflow_dispatch:
+    inputs:
+      service:
+        description: "Optional single service name"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  checks: write
+
+env:
+  IMAGE_REGISTRY: local
+  IMAGE_TAG: ci-${{ github.sha }}
+  K8S_NAMESPACE: dev
+  RENDER_ONLY: "true"
+
+jobs:
+  detect-services:
+    name: Detect Services
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.detect.outputs.matrix }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect services
+        id: detect
+        shell: bash
+        run: |
+          chmod +x ci/*.sh deploy/k8s/*.sh
+
+          if [ -n "${{ github.event.inputs.service }}" ]; then
+            MATRIX=$(SERVICE="${{ github.event.inputs.service }}" ./ci/detect-services.sh | jq -R -s -c 'split("\n")[:-1]')
+          else
+            MATRIX=$(./ci/service-matrix.sh)
+          fi
+
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+          echo "Service matrix: $MATRIX"
+
+  service-ci:
+    name: Validate Test Build Scan Render (${{ matrix.service }})
+    runs-on: ubuntu-latest
+    needs: detect-services
+    if: needs.detect-services.outputs.matrix != '[]'
+
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJson(needs.detect-services.outputs.matrix) }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install platform tools
+        shell: bash
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+          sudo apt-get update
+          sudo apt-get install -y wget apt-transport-https gnupg lsb-release gettext-base
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo gpg --dearmor -o /usr/share/keyrings/trivy.gpg
+          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update
+          sudo apt-get install -y trivy
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Validate contract
+        run: |
+          chmod +x ci/*.sh deploy/k8s/*.sh
+          ./ci/policy.sh "${{ matrix.service }}"
+          ./ci/validate-service.sh "${{ matrix.service }}"
+
+      - name: Test
+        run: ./ci/test.sh "${{ matrix.service }}"
+
+      - name: Build
+        env:
+          REGISTRY: ${{ env.IMAGE_REGISTRY }}
+        run: ./ci/build.sh "${{ matrix.service }}" "${{ env.IMAGE_TAG }}"
+
+      - name: Security scan
+        env:
+          REGISTRY: ${{ env.IMAGE_REGISTRY }}
+        run: ./ci/security.sh "${{ matrix.service }}" "${{ env.IMAGE_TAG }}"
+
+      - name: Render Kubernetes manifests
+        env:
+          IMAGE_REGISTRY: ${{ env.IMAGE_REGISTRY }}
+          IMAGE_TAG: ${{ env.IMAGE_TAG }}
+          RENDER_OUTPUT_DIR: build/rendered/${{ matrix.service }}
+        run: ./deploy/k8s/deploy.sh "${{ matrix.service }}"
+
+      - name: Validate rendered manifests
+        run: kubectl kustomize build/rendered/${{ matrix.service }} >/dev/null
+
+      - name: Upload rendered manifests
+        uses: actions/upload-artifact@v4
+        with:
+          name: rendered-${{ matrix.service }}
+          path: build/rendered/${{ matrix.service }}
+          retention-days: 14
